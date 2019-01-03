@@ -61,6 +61,7 @@ macro_argc = {
     'mkdir':1,
     'mkdirp':1,
     'p':1,
+    'p_ignoreNone':1,
     'parse':2,
     'parselines':2,
     'parselines1':2,

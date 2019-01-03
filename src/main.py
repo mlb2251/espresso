@@ -1,7 +1,8 @@
 # MAIN
 import sys
 import os
-sys.path.append(os.environ['HOME']+'/espresso/src/')
+homedir = os.environ['HOME']
+sys.path.append(homedir+'/espresso/src/')
 
 import readline
 import rlcompleter
@@ -60,7 +61,7 @@ else: # REPL mode
     # create a unique temp file to store code.
     # Uses a file named a_out.py in a directory named with a number so that importing works well
     i=0
-    master_dir = os.environ['HOME']+'/espresso/repl-tmpfiles/'
+    master_dir = homedir+'/espresso/repl-tmpfiles/'
     tmpdir = master_dir+str(i)
     while os.path.isdir(tmpdir):
         i = i+1
@@ -77,14 +78,25 @@ else: # REPL mode
     import a_out    #initial import so that refresh() can be used in loop
     code.append("backend.disablePrint() # REMOVE THIS FOR SCRIPT") # this MUST go after 'import' or you wont get any output!
     debug=False
+    mode='normal'
     # REPL loop
     while True:
-        print(os.getcwd())
-        line = input(u.mk_green(">>> "))
+        prettycwd = os.getcwd().replace(homedir,'~')
+        if mode == 'normal':
+            banner = u.mk_green("es:"+prettycwd+" $ ")
+        if mode == 'speedy':
+            banner = u.mk_purple("es:"+prettycwd+" $ %")
+        line = input(banner)
         reload(codegen) # constantly reloads codegen to update with your changes!
         reload(u)
         if len(line.strip()) == 0: continue
 
+        if line.strip() == '%':
+            if mode != 'speedy':
+                mode = 'speedy'
+            else:
+                mode = 'normal'
+            continue
         # handle metacommands
         if line[0] == '!':
             if line.strip() == '!print':
@@ -103,14 +115,31 @@ else: # REPL mode
         # update codeblock
         code.append("backend.enablePrint()")
         if line.strip()[-1] == ':': # start of an indent block
+            if mode == 'speedy': u.warn('dropping into normal mode for multiline')
             lines = [line]
             while True:
-                line = input(u.mk_green("... "))
+                line = input(u.mk_green('.'*len(banner)))
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
                 lines.append(line)
             code += [codegen.parse(line) for line in lines]
             to_undo = len(lines)
         else:
+            if mode == 'speedy': #prepend '%' to every line
+                line = line.strip() #strips line + prepends '%'
+
+                line = '%' + line
+                toks = line.split(' ')
+                # deal with special case transformations
+                if toks[0][1:] not in codegen.macro_argc:
+                    line = 'sh{'+line[1:]+'}' # the 1: just kills '%'
+                    u.warn('macro {} not recognized. Trying sh:\n{}'.format(toks[0][1:],line))
+                elif toks[0] in ['%cd','%cat']: # speedy cd autoquotes the $* it's given
+                    line = toks[0]+' "'+' '.join(toks[1:])+'"'
+
+                # finally, print the result
+                line = '%p_ignoreNone ('+line+')'
+
+
             code.append(codegen.parse(line))
             to_undo = 1
 

@@ -111,6 +111,11 @@ def m_head(filename,nlines=10):
 def m_p(s):
     print(str(s))
 
+def m_p_ignoreNone(s):
+    if s is not None:
+        m_p(s)
+
+
 def m_blue(s):
     return u.mk_blue(s)
 def m_red(s):
@@ -135,11 +140,12 @@ def m_mkdirp(the_path):
     os.makedirs(the_path)
 
 def m_cd(the_path):
-    print('old:',os.getcwd())
+    #print('old:',os.getcwd())
     os.chdir(the_path)
-    print('new:',os.getcwd())
+    #print('new:',os.getcwd())
 def m_pwd():
     return os.getcwd()
+
 
 
 

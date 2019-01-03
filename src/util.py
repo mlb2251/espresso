@@ -3,6 +3,9 @@ def die(s):
     red("ERROR:"+s)
     exit(1)
 
+def warn(s):
+    print(mk_yellow("WARN:"+s))
+
 
 class cols:
     MAGENTA = '\033[95m'
