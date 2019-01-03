@@ -5,6 +5,8 @@ from importlib import reload
 import codegen
 import util as u
 
+prgm_args = sys.argv[2:]    # often this is []
+
 if len(sys.argv) > 1:
     infile = sys.argv[1]
     outfile = "a_out.py"
@@ -24,7 +26,7 @@ if len(sys.argv) > 1:
 
     u.green("successfully written to:"+outfile)
     u.green("running...")
-    import a_out
+    #print(backend.sh('python3 a_out.py '+' '.join(prgm_args)))
 
 else: # REPL mode
     print(u.mk_red("Welcome to the ")+u.mk_bold(u.mk_yellow("Espresso"))+u.mk_red(" Language!"))
@@ -49,17 +51,22 @@ else: # REPL mode
     with open(tmpfile,'w') as f:
         f.write('\n'.join(code))
 
+    debug=False
     import a_out
     code.append("backend.disablePrint() # REMOVE THIS FOR SCRIPT") # disable print() attempts up until next enablePrint()
     # REPL loop
     while True:
         line = input(u.mk_green(">>> "))
+        reload(codegen) # constantly reloads codegen to update with your changes!
+        reload(u)
         if len(line.strip()) == 0: continue
 
         # handle metacommands
         if line[0] == '!':
             if line.strip() == '!print':
                 print(u.mk_yellow('\n'.join(code)))
+            if line.strip() == '!debug':
+                debug = not debug
             continue
 
         # update codeblock
@@ -71,8 +78,10 @@ else: # REPL mode
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
                 lines.append(line)
             code += [codegen.parse(line) for line in lines]
+            to_undo = len(lines)
         else:
             code.append(codegen.parse(line))
+            to_undo = 1
 
         # write to tmpfile
         with open(tmpfile,'w') as f:
@@ -81,14 +90,14 @@ else: # REPL mode
         # execute tmpfile
         try:
             reload(a_out)
-            last = code[-1]
-            code = code[:-2]
-            code.append(last)
+            latest = code[-to_undo:]
+            code = code[:-(to_undo+1)] #cutting out the print disabler
+            code += latest
             sys.stdout.flush()
         except Exception as e:
             u.red("Error:{}".format(e))
             sys.stdout.flush()
-            code = code[:-2]
+            code = code[:-(to_undo+1)] #erase added code including print disabler
 
 
 

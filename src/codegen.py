@@ -361,21 +361,26 @@ def build_special_args(fname,args):
 
 
 
-def parse(line):
-    u.red("========================="*3)
-    u.red("=Input=")
-    print(line)
+def parse(line,debug=False):
+    if debug:
+        u.red("========================="*3)
+        u.red("=Input=")
+        print(line)
     tkns = tokenize(line)
-    u.red("=Tokens=")
-    print(tkns)
+    if debug:
+        u.red("=Tokens=")
+        print(tkns)
     a = atomize1(tkns)
-    u.red("=Atoms1=")
-    print(a)
+    if debug:
+        u.red("=Atoms=")
+        print(a)
     macroize(a)
-    u.red("=Atoms2=")
-    print(a)
+    if debug:
+        u.red("=Atoms Post Macroization=")
+        print(a)
     out = a.gentext()
-    u.blue(out)
+    if debug:
+        u.blue(out)
     return out
 
 

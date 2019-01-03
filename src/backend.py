@@ -8,8 +8,18 @@ def disablePrint(): sys.stdout = open(os.devnull, 'w')
 def enablePrint(): sys.stdout = sys.__stdout__
 
 def sh(s):
+    s = s.replace('echo','/bin/echo') #there is prob a better way...
     res = sp.run(s,cwd='.',shell=True,stdout=sp.PIPE,stderr=sp.PIPE)
-    return res.stdout.decode("utf-8")
+    text =  res.stdout.decode("utf-8")
+    if text[-1] == '\n': text = text[:-1]
+    return text
+
+#print(sh('echo -n test'))
+
+#print(sh('for i in `ls`\n do \necho hi $i \n done'))
+#sp.run(shlex.split('echo -n hi'),cwd='.',shell=False,stdout=sp.PIPE,stderr=sp.PIPE)    # this does work but then it cant do for loops etc. better to stick with the other solution of replacing echo with /bin/echo.
+
+# do not do \n -> ; conversion bc this fails if 'if' and 'for' loops bc 'do' and 'then' cant be followed by semis. who knows what other ones exist. And after all \n works just fine!
 
 
 # takes an input string (could be the result of an sh{} or py expr or paren block or whatever --
