@@ -1,3 +1,4 @@
+# BACKEND
 import sys
 import os
 import util as u
@@ -9,7 +10,7 @@ def enablePrint(): sys.stdout = sys.__stdout__
 
 def sh(s):
     s = s.replace('echo','/bin/echo') #there is prob a better way...
-    res = sp.run(s,cwd='.',shell=True,stdout=sp.PIPE,stderr=sp.PIPE)
+    res = sp.run(s,shell=True,stdout=sp.PIPE,stderr=sp.PIPE)
     text =  res.stdout.decode("utf-8")
     if text[-1] == '\n': text = text[:-1]
     return text
@@ -121,7 +122,8 @@ def m_yellow(s):
 def m_purple(s):
     return u.mk_purple(s)
 
-def m_ls(dir='.',regex=None):
+def m_ls(dir = '.',regex=None):
+    dir = os.getcwd()+'/'+dir
     if regex is None:
         return os.listdir(dir)
     else:
@@ -131,6 +133,13 @@ def m_mkdir(the_path):
     os.mkdir(the_path)
 def m_mkdirp(the_path):
     os.makedirs(the_path)
+
+def m_cd(the_path):
+    print('old:',os.getcwd())
+    os.chdir(the_path)
+    print('new:',os.getcwd())
+def m_pwd():
+    return os.getcwd()
 
 
 

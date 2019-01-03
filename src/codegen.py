@@ -1,3 +1,4 @@
+# CODEGEN
 from enum import Enum,unique
 import re
 import os
@@ -41,33 +42,34 @@ class Tok(Enum):
             return u.mk_gray("WS")
         return self.name
 
+macro_argc = {
+    'argc':0,
+    'argv':0,
+    'basepath':1,
+    'blue':1,
+    'cat':1,
+    'cd':1,
+    'die':1,
+    'direxists?':1,
+    'exists?':1,
+    'exists?':1,
+    'fsize':1,
+    'fullpath':1,
+    'green':1,
+    'head':1,
+    'ls':0,
+    'mkdir':1,
+    'mkdirp':1,
+    'p':1,
+    'parse':2,
+    'parselines':2,
+    'parselines1':2,
+    'purple':1,
+    'pwd':0,
+    'red':1,
+    'yellow':1,
+}
 def get_macro_argc(name):
-    macro_argc = {
-        'parse':2,
-        'cat':1,
-        'head':1,
-        'exists?':1,
-        'parselines':2,
-        'parselines1':2,
-        'argc':0,
-        'argv':0,
-        'exists?':1,
-        'direxists?':1,
-        'fsize':1,
-        'fullpath':1,
-        'basepath':1,
-        'die':1,
-        'p':1,
-        'blue':1,
-        'red':1,
-        'yellow':1,
-        'green':1,
-        'purple':1,
-        'ls':0,
-        'mkdir':1,
-        'mkdirp':1,
-        # TODO fill out
-    }
     return macro_argc[name]
 
 def has_special_args(name): # returns boolean

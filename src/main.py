@@ -1,6 +1,8 @@
-
-
+# MAIN
+import sys
 import os
+sys.path.append(os.environ['HOME']+'/espresso/src/')
+
 import readline
 import rlcompleter
 readline.parse_and_bind("tab: complete")
@@ -30,7 +32,7 @@ prgm_args = sys.argv[2:]    # often this is []
 
 
 prelude = [
-    "import sys", "import os", "sys.path.append(os.environ['HOME']+'/espresso/src/')", "import backend"
+    "import sys", "import os", "sys.path.append(os.environ['HOME']+'/espresso/src/')", "import backend", "os.chdir(\""+os.getcwd()+"\")",
     ]
 
 if len(sys.argv) > 1:
@@ -77,6 +79,7 @@ else: # REPL mode
     debug=False
     # REPL loop
     while True:
+        print(os.getcwd())
         line = input(u.mk_green(">>> "))
         reload(codegen) # constantly reloads codegen to update with your changes!
         reload(u)
@@ -88,6 +91,9 @@ else: # REPL mode
                 print(u.mk_yellow('\n'.join(code)))
             if line.strip() == '!debug':
                 debug = not debug
+            if line.strip() == '!help':
+                u.blue('Currently implemented macros listing:')
+                print(u.mk_purple('\n'.join(codegen.macro_argc.keys())))
             if line.strip() == '!%':
                 pass
             if line.strip() == '!sh':
