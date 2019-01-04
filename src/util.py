@@ -1,4 +1,4 @@
-
+# UTIL
 from importlib import reload
 
 import os
@@ -27,17 +27,23 @@ def exception_str(e):
 # the first one mentioning '/espresso/src/' at any point
 # "verbose" option will print out the whole original exception in blue followed by
 # the formatted one
-def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False):
+def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text=False):
     if verbose:
-        blue(exception_str(e))
+        if given_text:
+            blue(''.join(e))
+        else:
+            blue(exception_str(e))
     try:
-        raw_tb = tb.format_exception(e.__class__,e,e.__traceback__)
+        if given_text:
+            raw_tb = e
+        else:
+            raw_tb = tb.format_exception(e.__class__,e,e.__traceback__)
+
         assert(raw_tb[0] == 'Traceback (most recent call last):\n')
         raw_tb = raw_tb[1:-1]   #rm first+last. last is a copy of str(e)
         #blue(''.join(raw_tb))
         #magenta(raw_tb)
         formatted = raw_tb
-
 
         # any lines not starting with 'File' are appended to the last seen
         # line that started with 'File'
@@ -145,11 +151,17 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False):
 
         res = [try_pretty_tb(s) for s in formatted]
         (formatted,commands) = zip(*res)
-        formatted = ['',mk_red(e)] + list(formatted) + ['']
+        if given_text: #e[-2][:-1] is the exception str eg 'NameError: name 'foo' is not defined'
+            formatted = ['',mk_red(e[-2][:-1])] + list(formatted) + ['']
+        else:
+            formatted = ['',mk_red(e)] + list(formatted) + ['']
         return ('\n'.join(formatted), commands)
     except Exception as e2:
         warn("(ignorable) Failed to Prettify exception, using default format. Note that the prettifying failure was due to: {}".format(exception_str(e2)))
-        return (mk_red(exception_str(e)),[])
+        if given_text:
+            return (mk_red(e),[])
+        else:
+            return (mk_red(exception_str(e)),[])
 
 
 
@@ -202,3 +214,27 @@ def yellow(msg):
     pc(cols.YELLOW,msg)
 def green(msg):
     pc(cols.OKGREEN+cols.BOLD,msg)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 3:
+        red("call like: p3 "+sys.argv[0]+" /path/to/file.py /path/to/stderr/file")
+    if len(sys.argv) == 5: #optionally pass a relevant path piece. otherwise it'll assume no relevant piece (often this is ok bc exceptions dont always contain full paths anyways
+        relevant_path_piece = argv[3]
+    file = sys.argv[1]
+    #relevant_path_piece = os.environ['HOME']
+    relevant_path_piece = ''
+    stderr = sys.argv[2]
+    with open(stderr,'r') as f:
+        exception = f.read().split('\n')
+    verbose=False
+    if exception[0] == 'verbose':
+        verbose=True
+        exception = exception[1:]
+    exception = [line+'\n' for line in exception]
+    fmtd = format_exception(exception,relevant_path_piece,given_text=True,verbose=verbose)[0]
+    print(fmtd)
+
+
+
