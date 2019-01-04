@@ -12,6 +12,7 @@ def sh(s):
     s = s.replace('echo','/bin/echo') #there is prob a better way...
     res = sp.run(s,shell=True,stdout=sp.PIPE,stderr=sp.PIPE)
     text =  res.stdout.decode("utf-8")
+    if text == '': return text
     if text[-1] == '\n': text = text[:-1]
     return text
 
