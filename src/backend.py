@@ -111,9 +111,15 @@ def m_head(filename,nlines=10):
 def m_p(s):
     print(str(s))
 
-def m_p_ignoreNone(s):
-    if s is not None:
-        m_p(s)
+
+def b_p_ignoreNone(s):
+    if s is None:
+        return
+    if isinstance(s,list):
+        m_p('   '.join(s))
+        return
+    m_p(s)
+
 
 
 def m_blue(s):
@@ -127,12 +133,16 @@ def m_yellow(s):
 def m_purple(s):
     return u.mk_purple(s)
 
-def m_ls(dir = '.',regex=None):
+def m_ls(dir = '.',regex=None,show_hidden=False):
     dir = os.getcwd()+'/'+dir
     if regex is None:
-        return os.listdir(dir)
+        listing = os.listdir(dir)
     else:
-        return list(filter(lambda s: re.match(regex,s) is not None, os.listdir(dir)))
+        listing = list(filter(lambda s: re.match(regex,s) is not None, os.listdir(dir)))
+    listing.sort()
+    if show_hidden == False:
+        listing = list(filter(lambda x: x[0]!='.', listing))
+    return listing
 
 def m_mkdir(the_path):
     os.mkdir(the_path)

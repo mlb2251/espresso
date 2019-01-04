@@ -1,9 +1,25 @@
 # UTIL
 from importlib import reload
 
+
 import os
 homedir = os.environ['HOME']
-src_path = homedir+'/espresso/src'
+src_path = homedir+'/espresso/src/'
+data_path = homedir+'/.espresso/'
+error_path = data_path+'error_handling/'
+repl_path = data_path+'repl-tmpfiles/'
+
+def init_dirs():
+    dirs = [src_path,data_path,error_path]
+    for d in dirs:
+        if not os.path.isdir(d):
+            os.makedirs(d)
+
+def clear_repl_tmpfiles():
+    import shutil
+    shutil.rmtree(repl_path)
+    os.makedirs(repl_path)
+    del shutil
 
 def die(s):
     red("ERROR:"+s)
@@ -14,6 +30,30 @@ def warn(s):
 
 def pretty_path(p):
     return p.replace(homedir,'~')
+
+# returns ['util','repl','main',...]
+def module_ls():
+    files = os.listdir(src_path)
+    files = list(filter(lambda x:x[-3:]=='.py',files)) # only py files
+    mod_names = [x[:-3] for x in files] # cut off extension
+    return mod_names
+
+# takes the result of sys.modules as an argument
+# since you give it your mods list i think it reloads them for it rather than for util.py
+# 'verbose' will cause the unformatted exception to be output as well
+def reload_modules(mods_dict,verbose=False):
+    failed_mods = []
+    for mod in module_ls():
+        if mod in mods_dict:
+            try:
+                reload(mods_dict[mod])
+                #blue('reloaded '+mod)
+            except Exception as e:
+                failed_mods.append(mod)
+                print(format_exception(e,src_path,ignore_outermost=1,verbose=verbose))
+                pass
+    return failed_mods # this is TRUTHY if any failed
+
 
 class PrettifyErr(Exception): pass
 class SafeImportErr(Exception): pass
@@ -27,7 +67,8 @@ def exception_str(e):
 # the first one mentioning '/espresso/src/' at any point
 # "verbose" option will print out the whole original exception in blue followed by
 # the formatted one
-def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text=False):
+# ignore_outermost=1 will throw away the first of (fmt,cmd) pair that the program generates, ie the first result of prettify_tb() in the list of results
+def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text=False,ignore_outermost=0):
     if verbose:
         if given_text:
             blue(''.join(e))
@@ -63,7 +104,15 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
         #    if relevant_path_piece in s:
         #        formatted = raw_tb[i:]
         #        break
-        formatted = list(filter(lambda s: relevant_path_piece in s, formatted))
+        if isinstance(relevant_path_piece,str):
+            formatted = list(filter(lambda s: relevant_path_piece in s, formatted))
+        elif isinstance(relevant_path_piece,list):
+            def aux(haystack,needles): #true if haystack contains at least one needle
+                for n in needles:
+                    if n in haystack:
+                        return True
+                return False
+            formatted = list(filter(lambda s: aux(s,relevant_path_piece), formatted))
 
 
         # for a traceback segment that looks like (second line after \n is optional, only shows up sometimes):
@@ -90,11 +139,11 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
                 raise PrettifyErr('more than 3 lines in a single traceback component:{}')
 
             if msg.count(',') == 1:
-                includes_mod = False
+                includes_fn = False
                 [fpath,lineno] = msg.split(',')
             elif msg.count(',') == 2:
-                includes_mod = True
-                [fpath,lineno,modname] = msg.split(',')
+                includes_fn = True
+                [fpath,lineno,fn_name] = msg.split(',')
             else:
                 raise PrettifyErr('unexpected number of commas in traceback component line:{}'.format(s))
 
@@ -102,11 +151,11 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
             # prettify file name (see example text above function)
             assert(len(fpath.split('"'))==3)
             fpath = fpath.split('"')[1] # extract actual file name
+            fpath_abs = os.path.abspath(fpath)
             if fpath == tmpfile:
                 fname = "tmpfile"
             else:
                 fname = os.path.basename(fpath)
-            fpath_abs = fpath
             fpath = fpath.replace(homedir,'~')
 
             # prettify line number (see example text above function)
@@ -115,25 +164,26 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
             lineno_white = lineno.split(' ')[1]
             lineno = lineno.split(' ')[1]
 
-            # prettify module name
-            if includes_mod:
-                modname = modname.strip()
-                assert(len(modname.split(' '))==2)
-                modname = modname.split(' ')[1]
-                if modname == '<module>':
-                    modname = ''
+            # prettify fn name
+            if includes_fn:
+                fn_name = fn_name.strip()
+                assert(len(fn_name.split(' '))==2)
+                fn_name = fn_name.split(' ')[1]
+                if fn_name == '<fnule>':
+                    fn_name = ''
                 else:
-                    modname = '('+modname+')'
+                    fn_name = fn_name+'()'
             else:
-                modname = ''
+                fn_name = ''
 
             # build final result
+            command = "+{} {}".format(lineno,fpath_abs)
             result = "{} {} {}".format(
-                    mk_underline(mk_red(fname+" @ "+lineno)),
+                    mk_underline(mk_red(fname+" @ "+lineno))+mk_red(':'),
                     mk_gray('('+fpath+')'),
-                    mk_green(modname)
+                    mk_purple('['+str(try_pretty_tb.cmdcount)+']'),
+                    mk_green(fn_name),
                     )
-            command = "nvim +{} {}".format(lineno,fpath_abs)
             if includes_code:
                 code_num_spaces = code_line.index(code_line.strip()[0])
                 code_line = code_line.strip()
@@ -146,16 +196,26 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
             if includes_arrow:
                 arrow_num_spaces = arrow.index(arrow.strip()[0])
                 offset = lineno_width + arrow_num_spaces - code_num_spaces
-                result += '\n{}{}'.format(' '*offset,mk_bold(mk_green('^')))
+                result += '\n{}{}'.format(' '*offset,mk_bold(mk_green('^here')))
+            try_pretty_tb.cmdcount += 1
             return (result,command)
 
+        try_pretty_tb.cmdcount = 0
         res = [try_pretty_tb(s) for s in formatted]
+        res = res[ignore_outermost:]
         (formatted,commands) = zip(*res)
-        if given_text: #e[-2][:-1] is the exception str eg 'NameError: name 'foo' is not defined'
-            formatted = ['',mk_red(e[-2][:-1])] + list(formatted) + ['']
+        with open(error_path+'/vim_cmds','w') as f:
+            commands = list(filter(None,commands))
+            f.write('\n'.join(commands))
+
+        if given_text:
+            # e[-2][:-1] is the exception str eg 'NameError: name 'foo' is not defined'
+            # silly ['']s are just to add extra newlines
+            formatted = [''] + [mk_red(e[-2][:-1])] + list(formatted) + ['']
         else:
-            formatted = ['',mk_red(e)] + list(formatted) + ['']
-        return ('\n'.join(formatted), commands)
+            formatted = [''] + [mk_red(e)] + list(formatted) + ['']
+
+        return '\n'.join(formatted)
     except Exception as e2:
         warn("(ignorable) Failed to Prettify exception, using default format. Note that the prettifying failure was due to: {}".format(exception_str(e2)))
         if given_text:
@@ -228,12 +288,14 @@ if __name__ == "__main__":
     stderr = sys.argv[2]
     with open(stderr,'r') as f:
         exception = f.read().split('\n')
+    if exception == ['']:
+        exit(0)
     verbose=False
     if exception[0] == 'verbose':
         verbose=True
         exception = exception[1:]
     exception = [line+'\n' for line in exception]
-    fmtd = format_exception(exception,relevant_path_piece,given_text=True,verbose=verbose)[0]
+    fmtd = format_exception(exception,relevant_path_piece,given_text=True,verbose=verbose)
     print(fmtd)
 
 

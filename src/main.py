@@ -3,6 +3,7 @@
 from importlib import reload
 import sys
 import os
+from copy import deepcopy
 
 sys.path.append(os.environ['HOME']+'/espresso/src')
 import codegen
@@ -16,7 +17,7 @@ import repl
 import readline
 import rlcompleter
 readline.parse_and_bind("tab: complete")
-histfile = os.path.join(os.path.expanduser("~"), ".eshist")
+histfile = os.path.join(u.error_path+'eshist')
 try:
     readline.read_history_file(histfile)
     # default history len is -1 (infinite), which may grow unruly
@@ -40,6 +41,9 @@ prelude = [
     "import sys", "import os", "sys.path.append(os.environ['HOME']+'/espresso/src/')", "import backend", "os.chdir(\""+os.getcwd()+"\")",
     ]
 
+# initialize any directories needed
+u.init_dirs()
+
 if len(sys.argv) > 1:
     infile = sys.argv[1]
     outfile = "a_out.py"
@@ -60,12 +64,9 @@ if len(sys.argv) > 1:
     #print(backend.sh('python3 a_out.py '+' '.join(prgm_args)))
 
 else: # REPL mode
-    print(mk_red("Welcome to the ")+mk_bold(mk_yellow("Espresso"))+mk_red(" Language!"))
+    print(mk_green("Welcome to the ")+mk_bold(mk_yellow("Espresso"))+mk_green(" Language!"))
 
-    #initialize directory for holding generated code
-    master_dir = u.homedir+'/.espresso/repl-tmpfiles/'
-    if not os.path.isdir(master_dir):
-        os.makedirs(master_dir)
+    master_dir = u.repl_path
 
     # create a unique temp file to store code.
     # Uses a file named a_out.py in a directory named with a number so that importing works well
@@ -73,10 +74,10 @@ else: # REPL mode
     tmpdir = master_dir+str(i)
     while os.path.isdir(tmpdir):
         i = i+1
-        tmpdir = master_dir+str(i)
+        tmpdir = master_dir+str(i)+'/'
     os.mkdir(tmpdir)
     sys.path.append(tmpdir) # this way "import a_out" will work later
-    tmpfile = tmpdir+'/a_out.py'
+    tmpfile = tmpdir+'a_out.py'
 
     # Prelude
     code = prelude
@@ -84,27 +85,53 @@ else: # REPL mode
         f.write('\n'.join(code))
     code.append("backend.disablePrint() # REMOVE THIS FOR SCRIPT") # this MUST go after the f.write() or you wont get any output from REPL
 
-    debug=False
-    mode='normal'
-    import a_out
-    state = [master_dir,tmpfile,code,mode,debug,a_out] # even passes the module a_out in!
-    retry=False
-    while True:
-        if retry:
-            input(green(">>> Hit enter to try again..."))
-            retry = False
-        try:
-            reload(repl)
-            reload(u)
-            reload(codegen)
-            the_repl = repl.Repl(state) #initialize Repl (new version)
-            the_repl.next() # run repl, this will update Repl internal state
-            state = the_repl.get_state() #extract state to be fed back in at new Repl init
-        except Exception as e:
-            print(u.format_exception(e,u.src_path)[0])
-            retry=True
-            continue
 
+    prelude_plus = [s for s in code]
+
+    import a_out
+    initial_vars_a_out = dir(a_out)
+    init_state = {
+            'master_dir':master_dir,
+            'tmpfile':tmpfile,
+            'code':code,
+            'mode':'normal',
+            'debug':False,
+            'communicate': [],
+            'verbose_exceptions':False,
+    }
+    state = deepcopy(init_state)
+    state['a_out'] = a_out # passing in a module! (deep copy fails on it)
+
+    def handle_communication(state):
+        old_communicate = deepcopy(state['communicate'])
+        state['communicate'] = []
+        for msg in old_communicate:
+            if msg == 'delete all tmpfiles for a_out':
+                state = deepcopy(init_state)
+                state['a_out'] = a_out
+                # here's the jank way to delete variables from an imported/reloaded mod
+                # note that 'del a_out' would indeed delete the module but upon
+                # reloading it all of the variables would return magically
+                for v in dir(a_out):
+                    if v not in initial_vars_a_out:
+                        exec('del a_out.{}'.format(v))
+            if msg == 'drop out of repl to reload from main':
+                while u.reload_modules(sys.modules,verbose=state['verbose_exceptions']):
+                    line = input(mk_green("looping reload from main... \nhit enter to retry.\n only metacommand is '!v' to print unformatted exception\n>>> "))
+                    if line.strip() == '!v':
+                        state['verbose_exceptions'] = not state['verbose_exceptions']
+        return state
+
+    # the main outermost loop
+    while True:
+        try:
+            the_repl = repl.Repl(state) #initialize Repl (new version/
+            the_repl.next() # run repl, this will update Repl internal state
+            state = the_repl.get_state() #extract state to be fed back in
+            state = handle_communication(state)
+        except Exception as e:
+            print(u.format_exception(e,u.src_path,verbose=state['verbose_exceptions']))
+            continue
 
 
 

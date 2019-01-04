@@ -61,7 +61,6 @@ macro_argc = {
     'mkdir':1,
     'mkdirp':1,
     'p':1,
-    'p_ignoreNone':1,
     'parse':2,
     'parselines':2,
     'parselines1':2,
@@ -393,11 +392,6 @@ def parse(line,debug=False):
 #parse("if %exists? filename:")
 #parse("vi_list = %parselines1 (%cat file) (int $1, int $2)")
 
-
-
-
-
-# I think the AtomTy system is badly done, perhaps should have separate AtomToken etc classes rather than an Atom.ty=AtomTy field.
 
 
 
