@@ -394,6 +394,10 @@ def parse(line,debug=False):
 #parse("vi_list = %parselines1 (%cat file) (int $1, int $2)")
 
 
+if __name__ == "__main__":
+    import sys
+    exception = sys.stdin.read()
+    purple(exception.split('\n')
 
 
 
