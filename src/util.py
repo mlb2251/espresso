@@ -4,7 +4,8 @@ from importlib import reload
 import subprocess as sp
 import os
 homedir = os.environ['HOME']
-src_path = homedir+'/espresso/src/'
+src_path = os.path.dirname(os.path.realpath(__file__))
+#src_path = homedir+'/espresso/src/'
 data_path = homedir+'/.espresso/'
 error_path = data_path+'error_handling/'
 repl_path = data_path+'repl-tmpfiles/'

@@ -5,7 +5,6 @@ import sys
 import os
 from copy import deepcopy
 
-sys.path.append(os.environ['HOME']+'/espresso/src')
 import codegen
 import util as u
 from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_green,mk_purple,mk_underline,red,blue,green,yellow,purple,pretty_path
@@ -33,7 +32,7 @@ prgm_args = sys.argv[2:]    # often this is []
 
 prelude = [
     "import sys,os",
-    "sys.path.append(os.environ['HOME']+'/espresso/src/')",
+    "sys.path.append(\""+u.src_path+"\")",
     "import backend",
     "os.chdir(\""+os.getcwd()+"\")",
     #"BACKEND_PIPE = backend.init_sh_backend()",

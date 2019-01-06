@@ -6,8 +6,6 @@ import traceback as tb
 
 import ast
 
-sys.path.append(os.environ['HOME']+'/espresso/src')
-sys.path.append(os.getcwd())
 import codegen
 import util as u
 from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_green,mk_purple,mk_underline,red,blue,green,yellow,purple,pretty_path
