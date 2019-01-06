@@ -58,7 +58,6 @@ def reload_modules(mods_dict,verbose=False):
 
 
 class PrettifyErr(Exception): pass
-class SafeImportErr(Exception): pass
 
 import traceback as tb
 def exception_str(e):

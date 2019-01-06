@@ -18,6 +18,23 @@ class Repl:
     def get_state(self):
         return self.state
 
+
+    def next(self):
+        line = self.get_input()
+        if line is None: return
+        if len(line.strip()) == 0: return
+        # for convenience, 'ls' or 'cd [anything]' will change the mode to speedy
+        if line.strip() == 'ls' or line.strip()[:3] == 'cd ':
+            self.state.mode = 'speedy'
+            self.update_banner()
+
+        # deal with ! commands
+        if self.try_metacommands(line):
+            return
+
+        new_code = self.gen_code(line)
+        self.run_code(new_code)
+
     # handles ! commands and returns 'False' if none were detected
     # (indicating the line should be parsed normally)
     def try_metacommands(self,line):
@@ -40,33 +57,17 @@ class Repl:
                 self.state.verbose_exceptions = not self.state.verbose_exceptions
             if line.strip() == '!reset':
                 self.state.communicate += ['reset state']
-            if line.strip() == '!cleanup':  #clears the /repl-tmpfiles directory
-                u.clear_repl_tmpfiles()
-                os.makedirs(os.path.dirname(self.state.tmpfile))
-            if line.strip() == '!which':
-                print(self.state.tmpfile)
+            #if line.strip() == '!cleanup':  #clears the /repl-tmpfiles directory
+                #u.clear_repl_tmpfiles()
+                #os.makedirs(os.path.dirname(self.state.tmpfile))
+            #if line.strip() == '!which':
+                #print(self.state.tmpfile)
             if line.strip() == '!help':
                 blue('Currently implemented macros listing:')
                 print(mk_purple('\n'.join(codegen.macro_argc.keys())))
             print(mk_gray("metacommand registered"))
             return True
         return False
-
-    def next(self):
-        line = self.get_input()
-        if line is None: return
-        if len(line.strip()) == 0: return
-        # for convenience, 'ls' or 'cd [anything]' will change the mode to speedy
-        if line.strip() == 'ls' or line.strip()[:3] == 'cd ':
-            self.state.mode = 'speedy'
-            self.update_banner()
-
-        # deal with ! commands
-        if self.try_metacommands(line):
-            return
-
-        new_code = self.gen_code(line)
-        self.run_code(new_code)
 
     def update_banner(self):
         prettycwd = pretty_path(os.getcwd())
@@ -126,7 +127,6 @@ class Repl:
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
                 lines.append(line)
             new_code += [codegen.parse(line,debug=self.state.debug) for line in lines]
-            #to_undo = len(lines)
         else:
             if self.state.mode == 'speedy': #prepend '%' to every line
                 line = line.strip() #strips line + prepends '%'
@@ -138,10 +138,6 @@ class Repl:
                     warn('macro {} not recognized. Trying sh:\n{}'.format(toks[0][1:],line))
                 elif toks[0] in ['%cd','%cat']: # speedy cd autoquotes the $* it's given
                     line = toks[0]+' "'+' '.join(toks[1:])+'"'
-
-                # finally, print the result
-                #line = 'backend.b_p_ignoreNone('+line+')'
-
 
             new_code.append(codegen.parse(line,debug=self.state.debug))
             #to_undo = 1
