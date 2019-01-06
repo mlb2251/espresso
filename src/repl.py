@@ -7,6 +7,7 @@ import traceback as tb
 import ast
 
 sys.path.append(os.environ['HOME']+'/espresso/src')
+sys.path.append(os.getcwd())
 import codegen
 import util as u
 from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_green,mk_purple,mk_underline,red,blue,green,yellow,purple,pretty_path
@@ -168,7 +169,7 @@ class Repl:
                 exec(code,self.state.globs,self.state.locs)
             self.state.code += new_code
         except Exception as e:
-            print(u.format_exception(e,[self.state.master_dir,u.src_path],tmpfile=self.state.tmpfile,verbose=self.state.verbose_exceptions))
+            print(u.format_exception(e,['<string>',u.src_path],verbose=self.state.verbose_exceptions))
 
 
 
