@@ -10,6 +10,7 @@ import util as u
 from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_green,mk_purple,mk_underline,red,blue,green,yellow,purple,pretty_path
 import repl
 
+# This segment sets up the interpreter to have history with arrows and tab based autocomplete
 import readline
 import rlcompleter
 readline.parse_and_bind("tab: complete")
@@ -24,12 +25,11 @@ import atexit
 atexit.register(readline.write_history_file, histfile)
 del histfile, rlcompleter
 
-## apparently theres a way to make your own completer!
-## could have a function that defaults to the python 'rlcompleter' 
-
+## apparently theres a way to make your own completer! Would be great
 
 prgm_args = sys.argv[2:]    # often this is []
 
+# initial code to be executed
 prelude = [
     "import sys,os",
     "sys.path.append(\""+u.src_path+"\")",
@@ -37,8 +37,9 @@ prelude = [
     "os.chdir(\""+os.getcwd()+"\")",
     #"BACKEND_PIPE = backend.init_sh_backend()",
     ]
+# initial state of the REPL
 init_state = {
-        'globs':dict(),
+        'globs':dict(), #TODO this should prob actually be set to whatever pythons initial globals() list is
         'locs':dict(),
         'code':prelude,
         'mode':'normal',
@@ -52,6 +53,7 @@ init_state = {
 # initialize any directories needed
 u.init_dirs()
 
+# updates the state based on communications sent through the list ReplState.communication
 def handle_communication(state):
     old_communicate = deepcopy(state.communicate)
     state.communicate = []
@@ -65,6 +67,11 @@ def handle_communication(state):
                     state.verbose_exceptions = not state.verbose_exceptions
     return state
 
+### I havent tested this lately and it should be fixed up at some point.
+### For example rn it doesnt pass arguments to the program it compiles
+### and it doesnt write it to disk (not sure if that is desirable or not)
+# Wouldn't be too hard to fix this
+# (you could pass args by inserting them into the prelude somehow)
 def do_compile():
     infile = sys.argv[1]
     outfile = "a_out.py"
@@ -86,6 +93,7 @@ def do_compile():
     #print(backend.sh('python3 a_out.py '+' '.join(prgm_args)))
 
 
+# This is the important function
 def start_repl():
     print(mk_green("Welcome to the ")+mk_bold(mk_yellow("Espresso"))+mk_green(" Language!"))
 
@@ -93,11 +101,12 @@ def start_repl():
 
 
     # alt. could replace this with a 'communicate' code that tells repl to run its full self.code block
+    # initialize the repl
     the_repl = repl.Repl(state)
     the_repl.run_code(prelude)
     the_repl.update_banner()
     state = the_repl.get_state()
-    # the main outermost loop
+    # This is the important core loop!
     while True:
         try:
             the_repl = repl.Repl(state) #initialize Repl (new version)
@@ -105,28 +114,32 @@ def start_repl():
             state = the_repl.get_state() #extract state to be fed back in
             state = handle_communication(state)
         except Exception as e:
+            #the program will never crash!!! It catches and prints exceptions and then continues in the while loop!
             print(u.format_exception(e,u.src_path,verbose=state.verbose_exceptions))
 
 
-# this lives in Main since it might cause probs to have it in Repl because it might prevent being able to reload or something. Not certain, could try some time.
+# ReplState keeps track of the important state variables of the REPL
+# Each time a repl.Repl is run on a new line, it returns a main.ReplState to main.py
+# And main.py uses this state to generate a new repl.Repl. The reason for this silliness
+# is so that we generate a new instance of repl.Repl on every step which is important
+# because repl.py gets reload()ed all the time to account for source code changes.
+# This lives in Main since it might cause probs to have it in Repl because it might prevent being able to reload or something. Not certain, could try some time.
 class ReplState:
     def __init__(self,value_dict):
-        #self.master_dir=value_dict["master_dir"]
-        self.globs=value_dict["globs"]
-        self.locs=value_dict["locs"]
-        #self.tmpfile=value_dict["tmpfile"]
-        self.code=value_dict["code"]
-        self.mode=value_dict["mode"]
-        self.banner=value_dict["banner"]
-        self.banner_uncoloredlen=value_dict["banner_uncoloredlen"]
-        self.debug=value_dict["debug"]
-        self.communicate=value_dict["communicate"] # messages to/from main.py
-        self.verbose_exceptions=value_dict['verbose_exceptions']
+        self.globs=value_dict["globs"]  # globals dict used by exec()
+        self.locs=value_dict["locs"]    # locals dict used by exec()
+        self.code=value_dict["code"]    # a list containing all the generated python code so far. Each successful line the REPL runs is added to this
+        self.mode=value_dict["mode"]    # 'normal' or 'speedy'
+        self.banner=value_dict["banner"] #the banner is that thing that looks like '>>> ' in the python interpreter for example
+        self.banner_uncoloredlen=value_dict["banner_uncoloredlen"] # the length of the banner, ignoring the meta chars used to color it
+        self.debug=value_dict["debug"]  #if this is True then parser output is generated. You can toggle it with '!debug'
+        self.communicate=value_dict["communicate"] # for passing messages between main.py and repl.py, for things like hard resets and stuff
+        self.verbose_exceptions=value_dict['verbose_exceptions'] #if this is true then full raw exceptions are printed in addition to the formatted ones
 
 
 try:
     if len(sys.argv) > 1:
-        do_compile
+        do_compile()
     else:
         start_repl()
 except Exception as e:

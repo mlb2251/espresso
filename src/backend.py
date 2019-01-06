@@ -1,12 +1,19 @@
 # BACKEND
+
+
+# This is the file that gets imported by the actual generated python program
+# OVERVIEW:
+# sh() executes a line of bash code. init_sh_backend() send() and recv() are all related to this.
+# anything starting with m_ is a macro. %cat automatically becomes m_cat() etc. 
+
 import sys
 import os
 import util as u
 import subprocess as sp
 
 
-def disablePrint(): sys.stdout = open(os.devnull, 'w')
-def enablePrint(): sys.stdout = sys.__stdout__
+#def disablePrint(): sys.stdout = open(os.devnull, 'w')
+#def enablePrint(): sys.stdout = sys.__stdout__
 
 def recv(pipe):
     return open(pipe).read().strip()
@@ -138,6 +145,7 @@ def m_p(s):
     print(str(s))
 
 
+# not used for now
 def b_p_ignoreNone(s):
     if s is None:
         return
@@ -181,13 +189,4 @@ def m_cd(the_path):
     #print('new:',os.getcwd())
 def m_pwd():
     return os.getcwd()
-
-
-
-
-#m_p(m_parselines('1 hi here\n3 5 here\n6 7 here\n1 2 a',[(1,int),(3,str),(2,int)]))
-
-
-
-
 

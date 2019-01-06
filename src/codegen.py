@@ -1,4 +1,12 @@
 # CODEGEN
+# OVERVIEW:
+# class Tok: an enum of the possible tokes, eg Tok.WHITESPACE
+# class Token: a parsed token. has some associated data
+# class AtomCompound, etc: These Atoms are AST components. Each has a .gentext() method that generates the actual final text that the atom should become in the compiled code
+# parse() is the main function here. It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
+
+
+
 from enum import Enum,unique
 import re
 import os
@@ -6,6 +14,8 @@ import util as u
 from util import die
 
 
+# Tok is the lowest level thing around. 
+# It's just an enum for the different tokens, with some built in regexes
 @unique
 class Tok(Enum):
     # IMPORTANT: order determines precedence. Higher will be favored in match
@@ -42,6 +52,7 @@ class Tok(Enum):
             return u.mk_gray("WS")
         return self.name
 
+# num of args each macro takes.
 macro_argc = {
     'argc':0,
     'argv':0,
@@ -72,20 +83,22 @@ macro_argc = {
 def get_macro_argc(name):
     return macro_argc[name]
 
+# for macros with args that need to be evaluated in an unusual manner
+# e.g. the idx/cast list argument of %parse
 def has_special_args(name): # returns boolean
     return name in ['parse', 'parselines', 'parselines1']
 
+# This is a parsed token
 class Token:
     def __init__(self,tok,data,verbatim):
-        self.tok=tok
-        self.data=data
-        self.verbatim=verbatim
+        self.tok=tok            #e.g. Tok.IDENTIFIER
+        self.data=data          # the contents of the capture group of the Tok's regex, if any.
+        self.verbatim=verbatim  # e.g. 'foo'. The verbatim text that the regex matched on
     def __repr__(self):
         return self.tok.__repr__()
 
 
-# turns a string into a list of (Token,data)
-# where data holds the first capturing group
+# turns a string into a list of Tokens
 def tokenize(s):
     if s == '': return []
     for i in list(Tok):
@@ -106,6 +119,8 @@ def tokenize(s):
 #    print(' '.join([t.__repr__() for (t,data) in tokenlist]))
 
 
+# An atom that contains a list of other atoms. e.g. AtomParen
+# Atoms are AST nodes.
 class AtomCompound:
     def __init__(self):
         self.data=[]
@@ -142,9 +157,12 @@ class AtomCompound:
 
 # may want to give custom codegen bodies later
 # wow super dumb python bug: never have __init__(self,data=[]) bc by putting '[]' in the argument only ONE copy exists of it for ALL instances of the class. This is very dumb but in python only one instance of each default variable exists and it gets reused.
+
+#The parent atom for a line of code
 class AtomMaster(AtomCompound):
     def gentext(self):
         return ''.join([x.gentext() for x in self])
+# the sh{} atom
 class AtomSH(AtomCompound):
     def gentext(self):
         body = ''.join([x.gentext() for x in self]).replace('"','\\"').replace('\1CONSERVEDQUOTE\1','"') # escape any quotes inside
@@ -160,6 +178,7 @@ class AtomParens(AtomCompound):
     def gentext(self):
         return '('+''.join([x.gentext() for x in self]) + ')'
 
+# A macro like %cat
 class AtomMacro(AtomCompound):
     def __init__(self,name,argc):
         super().__init__()
@@ -171,10 +190,12 @@ class AtomMacro(AtomCompound):
         return build_call(self.name,self.data)
 
 
+# assert that the object 'child' is and instance of the class 'parent'
 def assertInst(child,parent):
     if not isinstance(child,parent):
         die(str(child) + " is not an instance of " + str(parent))
 
+# any token that isn't converted to some other Atom
 class AtomTok: # not a subclass bc we don't want it to inherit add()
     def __init__(self,token):
         self.tok = token.tok
@@ -197,6 +218,7 @@ class AtomTok: # not a subclass bc we don't want it to inherit add()
     def gentext(self):
         return self.verbatim
 
+# dollar variables, like for sh{} interpolation with $foo
 class AtomDollar(AtomTok):
     def __init__(self,tok,mode):
         super().__init__(tok)
@@ -270,9 +292,11 @@ def atomize1(tokenlist):
 
 
 
+# is_tok(atom,Tok.WHITESPACE) will be true if atom is an AtomTok with a token of type Tok.WHITESPACE
 is_tok = lambda atom,tok: isinstance(atom,AtomTok) and atom.tok == tok
 
-# adds in macros
+# transforms the AST to figure out the arguments for each macro
+# Turns AtomTok of type Tok.MACROHEAD into AtomMacro containing a list of the argument Atoms
 def macroize(base_atom):
     #if isinstance(base_atom,
 
@@ -330,6 +354,7 @@ def build_call(fname,args):
         return x if isinstance(x,str) else x.gentext()
     return 'backend.m_'+fname+'('+','.join([text_if_needed(x) for x in args])+')'
 
+# used in build_call() for macros like %parse that have arguments that shouldn't be evaluated directly, like the idx/cast list of %parse.
 def build_special_args(fname,args):
     if fname in ['parse','parselines','parselines1']:
         idx_casts_tkns = args[1] # idx_casts_tkns = [ID DOLLAR COMMA ID DOLLAR COMMA ID DOLLAR COMMA ID DOLLAR COMMA]
@@ -361,8 +386,8 @@ def build_special_args(fname,args):
     die('Failed to match on fname={} in build_call_special_args()'.format(fname))
 
 
-
-
+# the main function that runs the parser
+# It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
 def parse(line,debug=False):
     if debug:
         u.red("========================="*3)

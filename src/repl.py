@@ -3,7 +3,6 @@ import sys
 import os
 from importlib import reload
 import traceback as tb
-
 import ast
 
 import codegen
@@ -11,13 +10,14 @@ import util as u
 from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_green,mk_purple,mk_underline,red,blue,green,yellow,purple,pretty_path
 
 
+# this is the Repl called from main.py
+# Repl.next() is the fundamental function that gets input, parses it, and runs it
 class Repl:
     def __init__(self,state):
-        self.state=state
+        self.state=state #self.state is a ReplState (defined in main.py, intentionally not here for reload() reasons)
 
     def get_state(self):
         return self.state
-
 
     def next(self):
         line = self.get_input()
@@ -69,6 +69,7 @@ class Repl:
             return True
         return False
 
+    # the banner is like the '>>> ' in the python repl for example
     def update_banner(self):
         prettycwd = pretty_path(os.getcwd())
         if self.state.mode == 'normal':
@@ -80,6 +81,7 @@ class Repl:
             self.state.banner_uncoloredlen = len(banner_txt)
             self.state.banner = mk_purple(banner_txt)
 
+    # prompts user for input and returns the line they enter.
     def get_input(self):
         try:
             # MUST reload everything bc this is the first step after taking input
@@ -95,13 +97,13 @@ class Repl:
                 if not failed_mods: # empty list is untruthy
                     break
                 if 'repl' in failed_mods:
-                    blue('error in repl.py, breaking to main.py to recompile')
+                    blue('error in repl.py, breaking to main.py to recompile') # fuck ya, clever boiiii
                     self.state.communicate += ['drop out of repl to reload from main']
                     return
                 line = input(mk_green("[Reload with ENTER]"))
                 if self.try_metacommands(line): #eg '!verbose_exc'
                     return
-        except KeyboardInterrupt: # ctrl-c lets you swap modes quickly
+        except KeyboardInterrupt: # ctrl-c lets you swap modes quickly TODO instead have this erase the current like like in the normal python repl
             if self.state.mode == 'speedy':
                 self.state.mode = 'normal'
             elif self.state.mode == 'normal':
@@ -112,13 +114,12 @@ class Repl:
         except EOFError: # exit with ctrl-d
             print('')
             exit(0)
-
         return line
 
+# takes a line of input and generates a list of lines of final python code using codegen.parse()
     def gen_code(self,line):
-        new_code = []
-        # update codeblock
-        #self.code.append("backend.enablePrint()")
+        new_code = [] #this is what we'll be adding our code to
+        # MULTILINE STATEMENTS
         if line.strip()[-1] == ':': # start of an indent block
             if self.state.mode == 'speedy': print(mk_gray('dropping into normal mode for multiline'))
             lines = [line]
@@ -128,6 +129,7 @@ class Repl:
                 lines.append(line)
             new_code += [codegen.parse(line,debug=self.state.debug) for line in lines]
         else:
+            # SPEEDY MODE TODO this will be changed to literally just run sh{} always
             if self.state.mode == 'speedy': #prepend '%' to every line
                 line = line.strip() #strips line + prepends '%'
                 line = '%' + line
@@ -138,22 +140,25 @@ class Repl:
                     warn('macro {} not recognized. Trying sh:\n{}'.format(toks[0][1:],line))
                 elif toks[0] in ['%cd','%cat']: # speedy cd autoquotes the $* it's given
                     line = toks[0]+' "'+' '.join(toks[1:])+'"'
-
+            # SPEEDY/NORMAL MODE
             new_code.append(codegen.parse(line,debug=self.state.debug))
             #to_undo = 1
         return new_code
 
+    # takes the output of gen_code and runs it
     def run_code(self,new_code):
         # write to tmpfile
         #with open(self.tmpfile,'w') as f:
             #f.write('\n'.join(self.code))
         codestring = '\n'.join(new_code)
-        # execute tmpfile
         try:
-            as_ast = ast.parse(codestring)
-            if len(as_ast.body) ==1 and isinstance(as_ast.body[0],ast.Expr):
+            as_ast = ast.parse(codestring) # parse into a python ast object
+            # TODO modify so if you have many statements with an Expr as the last one itll also do eval() just on the last line. e.g. 'x=4;x'
+            # This if-else block runs either eval() or exec() depending on whether the code is multiple statements
+            # or a single expression. This condition is checked by the if statement. The 'then' branch is the eval case (where its a single expression).
+            if len(as_ast.body) == 1 and isinstance(as_ast.body[0],ast.Expr):
                 #code = compile(as_ast,'<ast>','eval')
-                code = compile(codestring,'<string>','eval') #should be able to compile faster from as_ast but gave some error when i tried -- maybe worth looking into more
+                code = compile(codestring,'<string>','eval') #TODO should be able to compile faster from as_ast but gave some error when i tried -- maybe worth looking into more
                 res = eval(code,self.state.globs,self.state.locs)
                 if res is not None:
                     print(res) # TODO do special formatted print for speedy mode
@@ -161,8 +166,11 @@ class Repl:
                 #code = compile(as_ast,'<ast>','exec')
                 code = compile(codestring,'<string>','exec')
                 exec(code,self.state.globs,self.state.locs)
-            self.state.code += new_code
+            self.state.code += new_code # keep track of successfully executed code
         except Exception as e:
+            # This is where exceptions for the code go.
+            # TODO make em look nicer by telling format_exception this is the special case of a repl error thrown by exec() or eval()
+            # (for this you may wanna have ast.parse() in a separate try-except to differentiate. It'll catch syntax errors specifically.
             print(u.format_exception(e,['<string>',u.src_path],verbose=self.state.verbose_exceptions))
 
 

@@ -11,12 +11,14 @@ error_path = data_path+'error_handling/'
 repl_path = data_path+'repl-tmpfiles/'
 pipe_dir = data_path+'pipes/'
 
+# initialize dirs used by espresso
 def init_dirs():
     dirs = [src_path,data_path,error_path,pipe_dir]
     for d in dirs:
         if not os.path.isdir(d):
             os.makedirs(d)
 
+# not used right now
 def clear_repl_tmpfiles():
     import shutil
     shutil.rmtree(repl_path)
@@ -30,10 +32,12 @@ def die(s):
 def warn(s):
     print(mk_yellow("WARN:"+s))
 
+# cause nobody likes ugly paths
 def pretty_path(p):
     return p.replace(homedir,'~')
 
-# returns ['util','repl','main',...]
+# returns ['util','repl','main',...] These are the names of the source modules.
+# this is used in reload_modules()
 def module_ls():
     files = os.listdir(src_path)
     files = list(filter(lambda x:x[-3:]=='.py',files)) # only py files
@@ -41,8 +45,9 @@ def module_ls():
     return mod_names
 
 # takes the result of sys.modules as an argument
-# since you give it your mods list i think it reloads them for it rather than for util.py
 # 'verbose' will cause the unformatted exception to be output as well
+# TODO passing in sys.modules may be unnecessary bc util.py may share the same sys.modules
+# as everything else. Worth checking.
 def reload_modules(mods_dict,verbose=False):
     failed_mods = []
     for mod in module_ls():
@@ -63,12 +68,17 @@ import traceback as tb
 def exception_str(e):
     return ''.join(tb.format_exception(e.__class__,e,e.__traceback__))
 
+# Takes a shitty looking normal python exception and beautifies it.
+# also writes to .espresso/error_handling keeping track of the files/line numbers where the errors happened.
+# (which you can automatically open + jump to the correct line using a script like my e() bash function
+# included in a comment near the bottom of this file)
 # relevant_path_piece is just used to remove a lot of irrelevant parts of exceptions.
-# for example it might be '/espresso/src/' to ignore all lines of traceback before
-# the first one mentioning '/espresso/src/' at any point
+# for example it might be '/espresso/src/' to ignore all lines of traceback that dont contain that string
 # "verbose" option will print out the whole original exception in blue followed by
-# the formatted one
+# the formatted one.
 # ignore_outermost=1 will throw away the first of (fmt,cmd) pair that the program generates, ie the first result of prettify_tb() in the list of results
+# given_text = True if you pass in the actual python exception STRING to as 'e'
+# TODO replace tmpfile with an optional alias list
 def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text=False,ignore_outermost=0):
     if verbose:
         if given_text:
@@ -116,6 +126,7 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
             formatted = list(filter(lambda s: aux(s,relevant_path_piece), formatted))
 
 
+        # Turns an ugly traceback segment into a nice one
         # for a traceback segment that looks like (second line after \n is optional, only shows up sometimes):
         #File "/Users/matthewbowers/espresso/repl-tmpfiles/113/a_out.py", line 8, in <module>\n      test = 191923j2k9E # syntax error
         def try_pretty_tb(s):
@@ -276,6 +287,34 @@ def yellow(msg):
 def green(msg):
     pc(cols.OKGREEN+cols.BOLD,msg)
 
+
+# you can actually run this file and use it to format any exception you get.
+# I have it running on my main python by having the following in my
+# ~/.bash_profile
+#p3(){
+#    if [ $# -eq 0 ]; then
+#        python3
+#    else
+#        python3 $* 2> ~/.py_err
+#        python3 ~/espresso/src/util.py $1 ~/.py_err
+#    fi
+#}
+#v3(){
+#    echo "verbose" > ~/.py_err
+#    python3 $* 2>> ~/.py_err
+#    python3 ~/espresso/src/util.py $1 ~/.py_err
+#}
+## opens file based on python error idx passed to it
+## defaults to last error
+#e(){
+#    if [ $# -eq 0 ]; then
+#        line=$(tail -n1 ~/.espresso/error_handling/vim_cmds)
+#    else
+#        num=$(( $1 + 1  ))
+#        line=$(sed -n -e "$num"p ~/.espresso/error_handling/vim_cmds)
+#    fi
+#    nvim $line
+#}
 
 if __name__ == "__main__":
     import sys
