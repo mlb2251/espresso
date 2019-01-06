@@ -38,11 +38,35 @@ prelude = [
     "os.chdir(\""+os.getcwd()+"\")",
     #"BACKEND_PIPE = backend.init_sh_backend()",
     ]
+init_state = {
+        'globs':dict(),
+        'locs':dict(),
+        'code':prelude,
+        'mode':'normal',
+        'banner':'>>> ',
+        'banner_uncoloredlen':4,
+        'debug':False,
+        'communicate': [],
+        'verbose_exceptions':False,
+}
 
 # initialize any directories needed
 u.init_dirs()
 
-if len(sys.argv) > 1:
+def handle_communication(state):
+    old_communicate = deepcopy(state.communicate)
+    state.communicate = []
+    for msg in old_communicate:
+        if msg == 'reset state':
+            state = ReplState(deepcopy(init_state))
+        if msg == 'drop out of repl to reload from main':
+            while u.reload_modules(sys.modules,verbose=state.verbose_exceptions):
+                line = input(mk_green("looping reload from main... \nhit enter to retry.\n only metacommand is '!v' to print unformatted exception\n>>> "))
+                if line.strip() == '!v':
+                    state.verbose_exceptions = not state.verbose_exceptions
+    return state
+
+def do_compile():
     infile = sys.argv[1]
     outfile = "a_out.py"
 
@@ -52,92 +76,59 @@ if len(sys.argv) > 1:
         for line in f.readlines():
             code.append(codegen.parse(line))
     result = '\n'.join(code)
-    print(mk_yellow(result))
+    #print(mk_yellow(result))
 
-    with open(outfile,'w') as f:
-        f.write(result)
+    # TODO would be good to just compile to pure python for transferrability, 
+    # also you need a way to pass arguments...
+    exec(result)
 
-    green("successfully written to:"+outfile)
-    green("running...")
+    #green("successfully written to:"+outfile)
+    #green("running...")
     #print(backend.sh('python3 a_out.py '+' '.join(prgm_args)))
 
-else: # REPL mode
+
+def start_repl():
     print(mk_green("Welcome to the ")+mk_bold(mk_yellow("Espresso"))+mk_green(" Language!"))
 
-    master_dir = u.repl_path
-
-    # create a unique temp file to store code.
-    # Uses a file named a_out.py in a directory named with a number so that importing works well
-    i=0
-    tmpdir = master_dir+str(i)
-    while os.path.isdir(tmpdir):
-        i = i+1
-        tmpdir = master_dir+str(i)+'/'
-    os.mkdir(tmpdir)
-    sys.path.append(tmpdir) # this way "import a_out" will work later
-    tmpfile = tmpdir+'a_out.py'
-
-    # Prelude
-    code = prelude
-    with open(tmpfile,'w') as f:
-        f.write('\n'.join(code))
-    code.append("backend.disablePrint() # REMOVE THIS FOR SCRIPT") # this MUST go after the f.write() or you wont get any output from REPL
+    state = ReplState(deepcopy(init_state))
 
 
-    prelude_plus = [s for s in code]
-
-    import a_out
-    initial_vars_a_out = dir(a_out)
-    init_state = {
-            'master_dir':master_dir,
-            'tmpfile':tmpfile,
-            'code':code,
-            'mode':'normal',
-            'debug':False,
-            'communicate': [],
-            'verbose_exceptions':False,
-    }
-    state = deepcopy(init_state)
-    state['a_out'] = a_out # passing in a module! (deep copy fails on it)
-
-    def handle_communication(state):
-        old_communicate = deepcopy(state['communicate'])
-        state['communicate'] = []
-        for msg in old_communicate:
-            if msg == 'delete all tmpfiles for a_out':
-                state = deepcopy(init_state)
-                state['a_out'] = a_out
-                # here's the jank way to delete variables from an imported/reloaded mod
-                # note that 'del a_out' would indeed delete the module but upon
-                # reloading it all of the variables would return magically
-                for v in dir(a_out):
-                    if v not in initial_vars_a_out:
-                        exec('del a_out.{}'.format(v))
-            if msg == 'drop out of repl to reload from main':
-                while u.reload_modules(sys.modules,verbose=state['verbose_exceptions']):
-                    line = input(mk_green("looping reload from main... \nhit enter to retry.\n only metacommand is '!v' to print unformatted exception\n>>> "))
-                    if line.strip() == '!v':
-                        state['verbose_exceptions'] = not state['verbose_exceptions']
-        return state
-
+    # alt. could replace this with a 'communicate' code that tells repl to run its full self.code block
+    the_repl = repl.Repl(state)
+    the_repl.run_code(prelude)
+    the_repl.update_banner()
+    state = the_repl.get_state()
     # the main outermost loop
     while True:
         try:
-            the_repl = repl.Repl(state) #initialize Repl (new version/
+            the_repl = repl.Repl(state) #initialize Repl (new version)
             the_repl.next() # run repl, this will update Repl internal state
             state = the_repl.get_state() #extract state to be fed back in
             state = handle_communication(state)
         except Exception as e:
-            print(u.format_exception(e,u.src_path,verbose=state['verbose_exceptions']))
-            continue
+            print(u.format_exception(e,u.src_path,verbose=state.verbose_exceptions))
 
 
+# this lives in Main since it might cause probs to have it in Repl because it might prevent being able to reload or something. Not certain, could try some time.
+class ReplState:
+    def __init__(self,value_dict):
+        #self.master_dir=value_dict["master_dir"]
+        self.globs=value_dict["globs"]
+        self.locs=value_dict["locs"]
+        #self.tmpfile=value_dict["tmpfile"]
+        self.code=value_dict["code"]
+        self.mode=value_dict["mode"]
+        self.banner=value_dict["banner"]
+        self.banner_uncoloredlen=value_dict["banner_uncoloredlen"]
+        self.debug=value_dict["debug"]
+        self.communicate=value_dict["communicate"] # messages to/from main.py
+        self.verbose_exceptions=value_dict['verbose_exceptions']
 
 
-
-
-
-
-
-
-
+try:
+    if len(sys.argv) > 1:
+        do_compile
+    else:
+        start_repl()
+except Exception as e:
+    print(u.format_exception(e,u.src_path))
