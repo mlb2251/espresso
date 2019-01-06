@@ -11,9 +11,6 @@ import util as u
 from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_green,mk_purple,mk_underline,red,blue,green,yellow,purple,pretty_path
 import repl
 
-
-
-
 import readline
 import rlcompleter
 readline.parse_and_bind("tab: complete")
@@ -32,13 +29,14 @@ del histfile, rlcompleter
 ## could have a function that defaults to the python 'rlcompleter' 
 
 
-
-
 prgm_args = sys.argv[2:]    # often this is []
 
-
 prelude = [
-    "import sys", "import os", "sys.path.append(os.environ['HOME']+'/espresso/src/')", "import backend", "os.chdir(\""+os.getcwd()+"\")",
+    "import sys,os",
+    "sys.path.append(os.environ['HOME']+'/espresso/src/')",
+    "import backend",
+    "os.chdir(\""+os.getcwd()+"\")",
+    #"BACKEND_PIPE = backend.init_sh_backend()",
     ]
 
 # initialize any directories needed

@@ -8,13 +8,38 @@ import subprocess as sp
 def disablePrint(): sys.stdout = open(os.devnull, 'w')
 def enablePrint(): sys.stdout = sys.__stdout__
 
-def sh(s):
-    s = s.replace('echo','/bin/echo') #there is prob a better way...
-    res = sp.run(s,shell=True,stdout=sp.PIPE,stderr=sp.PIPE)
-    text =  res.stdout.decode("utf-8")
-    if text == '': return text
-    if text[-1] == '\n': text = text[:-1]
-    return text
+def recv(pipe):
+    return open(pipe).read().strip()
+
+def send(s,pipe):
+    open(pipe,'w').write('cd '+os.getcwd()+';'+s)
+
+# create a new pipe
+# popen a backend_sh.sh with the pipe
+# also return the pipe's file path
+def init_sh_backend():
+    i=0
+    pipe = u.pipe_dir+str(i)
+    while os.path.exists(pipe):
+        i = i+1
+        pipe = u.pipe_dir+str(i)
+    os.mkfifo(pipe)
+    sp.Popen(['/bin/bash',u.src_path+'backend_sh.sh',pipe]) #background process
+    return pipe
+
+def sh(s,pipe):
+    if len(s) == 0: return ''
+    if s[-1] == '\n': s = s[:-1]
+    send(s,pipe)
+    res = recv(pipe)
+    return res
+
+    #s = s.replace('echo','/bin/echo') #there is prob a better way...
+    #res = sp.run(s,shell=True,stdout=sp.PIPE,stderr=sp.PIPE)
+    #text =  res.stdout.decode("utf-8")
+    #if text == '': return text
+    #if text[-1] == '\n': text = text[:-1]
+    #return text
 
 #print(sh('echo -n test'))
 

@@ -148,7 +148,7 @@ class AtomMaster(AtomCompound):
 class AtomSH(AtomCompound):
     def gentext(self):
         body = ''.join([x.gentext() for x in self]).replace('"','\\"').replace('\1CONSERVEDQUOTE\1','"') # escape any quotes inside
-        return 'backend.sh("' + body + '")'
+        return 'backend.sh("' + body + '",BACKEND_PIPE)'
 class AtomQuote(AtomCompound):
     def __init__(self,tok):
         super().__init__()

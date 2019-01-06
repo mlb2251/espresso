@@ -1,16 +1,17 @@
 # UTIL
 from importlib import reload
 
-
+import subprocess as sp
 import os
 homedir = os.environ['HOME']
 src_path = homedir+'/espresso/src/'
 data_path = homedir+'/.espresso/'
 error_path = data_path+'error_handling/'
 repl_path = data_path+'repl-tmpfiles/'
+pipe_dir = data_path+'pipes/'
 
 def init_dirs():
-    dirs = [src_path,data_path,error_path]
+    dirs = [src_path,data_path,error_path,pipe_dir]
     for d in dirs:
         if not os.path.isdir(d):
             os.makedirs(d)
