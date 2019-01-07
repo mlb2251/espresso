@@ -156,6 +156,7 @@ class Repl:
             # earlier version, look back thru the git repository if you need it. However
             # really you should be able to just divide up your input and call run_code multiple
             # times with the pieces.
+            u.red(codestring)
             as_ast = ast.parse(codestring,mode='single') # parse into a python ast object
             as_ast = ast.fix_missing_locations(as_ast)
             code = compile(as_ast,'<ast>','single')

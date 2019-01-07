@@ -38,6 +38,7 @@ class Tok(Enum):
     QUOTE2    = re.compile(r'\"')
     QUOTE1    = re.compile(r'\'')
     DOLLARESC = re.compile(r'\$\$')
+    DOLLARPAREN = re.compile(r'\$\(')
     DOLLARVAR = re.compile(r'\$(\w+)')
     IDENTIFIER= re.compile(r'(\w+)')
     UNKNOWN   = re.compile(r'(.)')
@@ -178,6 +179,13 @@ class AtomParens(AtomCompound):
     def gentext(self):
         return '('+''.join([x.gentext() for x in self]) + ')'
 
+class AtomDollarParens(AtomCompound):
+    def gentext(self):
+        py_expr =  ''.join([x.gentext() for x in self])
+        return "\"+str({})+\"".format(py_expr).replace('"','\1CONSERVEDQUOTE\1')
+
+
+
 # A macro like %cat
 class AtomMacro(AtomCompound):
     def __init__(self,name,argc):
@@ -191,8 +199,16 @@ class AtomMacro(AtomCompound):
 
 
 # assert that the object 'child' is and instance of the class 'parent'
+# optionally 'parent' can be a list of possible classes
 def assertInst(child,parent):
-    if not isinstance(child,parent):
+    do_die = True
+    if isinstance(parent,list):
+        for cls in parent:
+            if isinstance(child,cls):
+                do_die = False
+    elif isinstance(child,parent):
+        do_die = False
+    if do_die:
         die(str(child) + " is not an instance of " + str(parent))
 
 # any token that isn't converted to some other Atom
@@ -218,72 +234,83 @@ class AtomTok: # not a subclass bc we don't want it to inherit add()
     def gentext(self):
         return self.verbatim
 
+
 # dollar variables, like for sh{} interpolation with $foo
 class AtomDollar(AtomTok):
     def __init__(self,tok,mode):
         super().__init__(tok)
         self.mode=mode
     def gentext(self): #for dollar this is only called when NOT part of a special macro construct like idx_casts (int $1, int $3) etc
-        if self.mode == 'global':
+        if self.mode == 'global': #TODO make it actually use this
             return 'os.environ('+self.data+')'
         elif self.mode == 'interp':
-            return "\"+str(locals()[\"{}\"])+\"".format(self.data).replace('"','\1CONSERVEDQUOTE\1')
+            return "\"+str({})+\"".format(self.data).replace('"','\1CONSERVEDQUOTE\1')
         else:
             die("unrecognized mode:{}".format(self.mode))
 
 # turn a token list into a MASTER atom containing all other atoms
 def atomize1(tokenlist):
-    in_sh = False
     curr_quote = None #None, Tok.QUOTE1 or Tok.QUOTE2
-    brace_depth = 0
+    parents = [('master',None)] # the None can hold extra data eg brace depth for SH
     atoms = [AtomMaster()]
+    def parent(): return parents[-1][0]
+    def data(): return parents[-1][1]
+    def parent_atom(): return atoms[-1]
     for token in tokenlist:
         t = token.tok #the Tok
-        if t == Tok.DOLLARVAR and in_sh:
+        if t == Tok.DOLLARVAR and parent() == 'sh':
             as_tok = AtomDollar(token,'interp')
-        elif t == Tok.DOLLARVAR and not in_sh:
+        elif t == Tok.DOLLARVAR and parent() != 'sh':
             as_tok = AtomDollar(token,'global')
         else:
             as_tok = AtomTok(token)
         # IF IN QUOTE ATOM, then everything is a plain token other than the exit quote token
-        if curr_quote: #highest precedence -- special rules when inside quotes
+        if parent() == 'quote': #highest precedence -- special rules when inside quotes
             # EXIT QUOTE ATOM?
-            if t == curr_quote: #close quotation
-                curr_quote = None
+            if t == data()['curr_quote']: #close quotation
                 assertInst(atoms[-1],AtomQuote)
+                parents.pop()
                 atoms[-2].add(atoms.pop())  #pop last atom onto end of second to last atom's data
             # STAY IN QUOTE ATOM
             else:
                 atoms[-1].add(as_tok)
         # ENTER QUOTE ATOM?
         elif t == Tok.QUOTE1 or t == Tok.QUOTE2:
-            curr_quote = t
+            parents.append(('quote',{'curr_quote':t}))
             atoms.append(AtomQuote(token))    #start a new quote atom
-        # IF IN SH, then we don't care about anything but { } counting. we leave the SH atom data as a flattened token list
-        elif in_sh:
+        # IF IN SH, then we don't care about anything but { } counting and DollarParens
+        # everything else is flattened (so no worries about needing to recurse or keep track
+        # of having a sh{} somewhere earlier on the stack)
+        elif parent() == 'sh':
             if t == Tok.SH_LBRACE: die("SH_LBRACE inside of an sh{}")
             elif t == Tok.LBRACE:
-                brace_depth += 1
+                data()['brace_depth'] += 1
             elif t == Tok.RBRACE:
-                brace_depth -= 1
+                data()['brace_depth'] -= 1
                 # LEAVE SH
-                if brace_depth == 0:
-                    in_sh = False
+                if data()['brace_depth'] == 0:
                     assertInst(atoms[-1],AtomSH)
+                    parents.pop()
                     atoms[-2].add(atoms.pop())
+            # ENTER DOLLARPARENS? (only possible from within SH)
+            elif t == Tok.DOLLARPAREN:
+                parents.append('dollarparens')
+                atoms.append(AtomDollarParens())
             #STAY IN SH
             else:
                 atoms[-1].add(as_tok)
         # ENTER SH?
         elif t == Tok.SH_LBRACE:
-            brace_depth = 1
-            in_sh = True
+            parents.append(('sh',{'brace_depth':1}))
             atoms.append(AtomSH())
-        # PARENS
+        # OPEN PARENS
         elif t == Tok.LPAREN:
+            parents.append(('parens',None))
             atoms.append(AtomParens())
+        # CLOSE PARENS
         elif t == Tok.RPAREN:
-            assertInst(atoms[-1],AtomParens)
+            assertInst(atoms[-1],[AtomParens,AtomDollarParens])
+            parents.pop()
             atoms[-2].add(atoms.pop())
         else:
             atoms[-1].add(as_tok)
@@ -294,6 +321,8 @@ def atomize1(tokenlist):
 
 # is_tok(atom,Tok.WHITESPACE) will be true if atom is an AtomTok with a token of type Tok.WHITESPACE
 is_tok = lambda atom,tok: isinstance(atom,AtomTok) and atom.tok == tok
+
+
 
 # transforms the AST to figure out the arguments for each macro
 # Turns AtomTok of type Tok.MACROHEAD into AtomMacro containing a list of the argument Atoms
