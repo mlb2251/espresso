@@ -27,8 +27,7 @@ def clear_repl_tmpfiles():
     del shutil
 
 def die(s):
-    red("ERROR:"+s)
-    exit(1)
+    raise VerbatimExc(mk_red("Error:"+str(s)))
 
 def warn(s):
     print(mk_yellow("WARN:"+s))
@@ -64,6 +63,7 @@ def reload_modules(mods_dict,verbose=False):
 
 
 class PrettifyErr(Exception): pass
+class VerbatimExc(Exception): pass
 
 import traceback as tb
 def exception_str(e):

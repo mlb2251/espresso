@@ -164,6 +164,8 @@ class Repl:
                 code = compile(codestring,'<string>','exec')
                 exec(code,self.state.globs,self.state.locs)
             self.state.code += new_code # keep track of successfully executed code
+        except u.VerbatimExc as e:
+            print(e)
         except Exception as e:
             # This is where exceptions for the code go.
             # TODO make em look nicer by telling format_exception this is the special case of a repl error thrown by exec() or eval()

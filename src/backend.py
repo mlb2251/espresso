@@ -43,7 +43,7 @@ def sh(s,in_pipe,out_pipe):
     if len(s) == 0: return ''
     if s[-1] != '\n': s = s + '\n'
     if s.count('\n') > 1:
-        raise Exception("can't take more than one line in SH. this can totally be improved upon in the future! just change the bash backend script to use read -d or something like that and play around with it, or have a special message you send to the backend that tells it to keep reading lines until it gets a line ender special signal")
+        raise VerbatimException(mk_yellow("can't take more than one line in SH. this can totally be improved upon in the future! just change the bash backend script to use read -d or something like that and play around with it, or have a special message you send to the backend that tells it to keep reading lines until it gets a line ender special signal"))
     send(s,in_pipe)
     res = recv(out_pipe)
     return res
@@ -142,6 +142,7 @@ def m_basename(the_path):
 def m_die(s):
     u.red("Error:"+str(s))
     exit(1)
+    #raise VerbatimExc(mk_red("Error:"+str(s)))
 
 def m_head(filename,nlines=10):
     with open(filename,'r') as f:

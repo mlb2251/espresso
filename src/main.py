@@ -113,6 +113,8 @@ def start_repl():
             the_repl.next() # run repl, this will update Repl internal state
             state = the_repl.get_state() #extract state to be fed back in
             state = handle_communication(state)
+        except u.VerbatimExc as e:
+            print(e)
         except Exception as e:
             #the program will never crash!!! It catches and prints exceptions and then continues in the while loop!
             print(u.format_exception(e,u.src_path,verbose=state.verbose_exceptions))
