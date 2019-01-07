@@ -149,20 +149,11 @@ class Repl:
             #f.write('\n'.join(self.code))
         codestring = '\n'.join(new_code)
         try:
-            as_ast = ast.parse(codestring) # parse into a python ast object
-            # TODO modify so if you have many statements with an Expr as the last one itll also do eval() just on the last line. e.g. 'x=4;x'
-            # This if-else block runs either eval() or exec() depending on whether the code is multiple statements
-            # or a single expression. This condition is checked by the if statement. The 'then' branch is the eval case (where its a single expression).
-            if len(as_ast.body) == 1 and isinstance(as_ast.body[0],ast.Expr):
-                #code = compile(as_ast,'<ast>','eval')
-                code = compile(codestring,'<string>','eval') #TODO should be able to compile faster from as_ast but gave some error when i tried -- maybe worth looking into more
-                res = eval(code,self.state.globs,self.state.locs)
-                if res is not None:
-                    print(res) # TODO do special formatted print for speedy mode
-            else:
-                #code = compile(as_ast,'<ast>','exec')
-                code = compile(codestring,'<string>','exec')
-                exec(code,self.state.globs,self.state.locs)
+            as_ast = ast.parse(codestring,mode='single') # parse into a python ast object
+            as_ast = ast.fix_missing_locations(as_ast)
+            code = compile(as_ast,'<ast>','single')
+            exec(code,self.state.globs,self.state.locs)
+            #print(ast.dump(as_ast))
             self.state.code += new_code # keep track of successfully executed code
         except u.VerbatimExc as e:
             print(e)

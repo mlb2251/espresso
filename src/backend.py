@@ -142,7 +142,6 @@ def m_basename(the_path):
 def m_die(s):
     u.red("Error:"+str(s))
     exit(1)
-    #raise VerbatimExc(mk_red("Error:"+str(s)))
 
 def m_head(filename,nlines=10):
     with open(filename,'r') as f:
