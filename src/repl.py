@@ -25,7 +25,8 @@ class Repl:
         if line is None: return
         if len(line.strip()) == 0: return
         # for convenience, 'ls' or 'cd [anything]' will change the mode to speedy
-        if line.strip() == 'ls' or line.strip()[:3] == 'cd ':
+        if (line.strip() == 'ls' or line.strip()[:3] == 'cd ') and self.state.mode == 'normal':
+            print(mk_gray('implicit switch to speedy mode'))
             self.state.mode = 'speedy'
             self.update_banner()
 
@@ -131,7 +132,6 @@ class Repl:
                 lines.append(line)
             new_code += [codegen.parse(line,debug=self.state.debug) for line in lines]
         else:
-            # SPEEDY MODE TODO this will be changed to literally just run sh{} always
             if self.state.mode == 'speedy':
                 line = line.strip()
                 toks = line.split(' ')
