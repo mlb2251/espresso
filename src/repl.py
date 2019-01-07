@@ -149,6 +149,13 @@ class Repl:
             #f.write('\n'.join(self.code))
         codestring = '\n'.join(new_code)
         try:
+            # Note that this can only take one Interactive line at a time (which may
+            # actually be a multiline for loop etc).
+            # A version that compiled with 'exec' or 'eval' mode and thus could
+            # handle multiple Interactive lines at once was used in an
+            # earlier version, look back thru the git repository if you need it. However
+            # really you should be able to just divide up your input and call run_code multiple
+            # times with the pieces.
             as_ast = ast.parse(codestring,mode='single') # parse into a python ast object
             as_ast = ast.fix_missing_locations(as_ast)
             code = compile(as_ast,'<ast>','single')

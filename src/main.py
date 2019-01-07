@@ -103,7 +103,8 @@ def start_repl():
     # alt. could replace this with a 'communicate' code that tells repl to run its full self.code block
     # initialize the repl
     the_repl = repl.Repl(state)
-    the_repl.run_code(prelude)
+    for line in prelude:
+        the_repl.run_code([line])
     the_repl.update_banner()
     state = the_repl.get_state()
     # This is the important core loop!
