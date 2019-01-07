@@ -76,7 +76,7 @@ class Repl:
         self.state.banner_cwd = os.getcwd()
         prettycwd = pretty_path(self.state.banner_cwd)
         if self.state.mode == 'normal':
-            banner_txt = "es:"+prettycwd+" % "
+            banner_txt = "es:"+prettycwd+" > "
             self.state.banner_uncoloredlen = len(banner_txt)
             self.state.banner = mk_blue(banner_txt)
         if self.state.mode == 'speedy':
