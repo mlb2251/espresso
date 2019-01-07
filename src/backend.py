@@ -19,6 +19,7 @@ def recv(pipe):
     return open(pipe).read().strip()
 
 def send(s,pipe):
+    u.blue("send:"+s)
     open(pipe,'w').write('cd '+os.getcwd()+';'+s)
 
 # create a new pipe
@@ -26,19 +27,25 @@ def send(s,pipe):
 # also return the pipe's file path
 def init_sh_backend():
     i=0
-    pipe = u.pipe_dir+str(i)
-    while os.path.exists(pipe):
-        i = i+1
-        pipe = u.pipe_dir+str(i)
-    os.mkfifo(pipe)
-    sp.Popen(['/bin/bash',u.src_path+'backend_sh.sh',pipe]) #background process
-    return pipe
+    in_pipe = u.pipe_dir+str(i)+'_in'
+    while os.path.exists(in_pipe):
+        i += 1
+        in_pipe = u.pipe_dir+str(i)+'_in'
+    out_pipe = u.pipe_dir+str(i)+'_out'
+    os.mkfifo(in_pipe)
+    os.mkfifo(out_pipe)
 
-def sh(s,pipe):
+    sp.Popen(['/bin/bash',u.src_path+'backend_sh.sh',in_pipe,out_pipe])
+
+    return in_pipe,out_pipe
+
+def sh(s,in_pipe,out_pipe):
     if len(s) == 0: return ''
-    if s[-1] == '\n': s = s[:-1]
-    send(s,pipe)
-    res = recv(pipe)
+    if s[-1] != '\n': s = s + '\n'
+    if s.count('\n') > 1:
+        raise Exception("can't take more than one line in SH. this can totally be improved upon in the future! just change the bash backend script to use read -d or something like that and play around with it, or have a special message you send to the backend that tells it to keep reading lines until it gets a line ender special signal")
+    send(s,in_pipe)
+    res = recv(out_pipe)
     return res
 
     #s = s.replace('echo','/bin/echo') #there is prob a better way...

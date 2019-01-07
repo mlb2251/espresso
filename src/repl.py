@@ -130,16 +130,13 @@ class Repl:
             new_code += [codegen.parse(line,debug=self.state.debug) for line in lines]
         else:
             # SPEEDY MODE TODO this will be changed to literally just run sh{} always
-            if self.state.mode == 'speedy': #prepend '%' to every line
-                line = line.strip() #strips line + prepends '%'
-                line = '%' + line
+            if self.state.mode == 'speedy':
+                line = line.strip()
                 toks = line.split(' ')
-                # deal with special case transformations
-                if toks[0][1:] not in codegen.macro_argc:
-                    line = 'sh{'+line[1:]+'}' # the 1: just kills '%'
-                    warn('macro {} not recognized. Trying sh:\n{}'.format(toks[0][1:],line))
-                elif toks[0] in ['%cd','%cat']: # speedy cd autoquotes the $* it's given
-                    line = toks[0]+' "'+' '.join(toks[1:])+'"'
+                if line[:3] == 'cd ':
+                    line = '%cd "'+' '.join(toks[1:])+'"'
+                else:
+                    line = 'sh{'+line+'}'
             # SPEEDY/NORMAL MODE
             new_code.append(codegen.parse(line,debug=self.state.debug))
             #to_undo = 1

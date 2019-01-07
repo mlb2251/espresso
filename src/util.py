@@ -4,7 +4,7 @@ from importlib import reload
 import subprocess as sp
 import os
 homedir = os.environ['HOME']
-src_path = os.path.dirname(os.path.realpath(__file__))
+src_path = os.path.dirname(os.path.realpath(__file__))+'/'
 #src_path = homedir+'/espresso/src/'
 data_path = homedir+'/.espresso/'
 error_path = data_path+'error_handling/'
@@ -16,6 +16,7 @@ def init_dirs():
     dirs = [src_path,data_path,error_path,pipe_dir]
     for d in dirs:
         if not os.path.isdir(d):
+            blue('created:'+d)
             os.makedirs(d)
 
 # not used right now

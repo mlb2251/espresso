@@ -35,7 +35,7 @@ prelude = [
     "sys.path.append(\""+u.src_path+"\")",
     "import backend",
     "os.chdir(\""+os.getcwd()+"\")",
-    #"BACKEND_PIPE = backend.init_sh_backend()",
+    "BACKEND_PIPE_IN,BACKEND_PIPE_OUT = backend.init_sh_backend()",
     ]
 # initial state of the REPL
 init_state = {
