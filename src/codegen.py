@@ -242,14 +242,14 @@ class AtomDollar(AtomTok):
         self.mode=mode
     def gentext(self): #for dollar this is only called when NOT part of a special macro construct like idx_casts (int $1, int $3) etc
         if self.mode == 'global': #TODO make it actually use this
-            return 'os.environ('+self.data+')'
+            return 'os.environ["'+self.data+'"]'
         elif self.mode == 'interp':
             return "\"+str({})+\"".format(self.data).replace('"','\1CONSERVEDQUOTE\1')
         else:
             die("unrecognized mode:{}".format(self.mode))
 
 # turn a token list into a MASTER atom containing all other atoms
-def atomize1(tokenlist):
+def atomize(tokenlist):
     curr_quote = None #None, Tok.QUOTE1 or Tok.QUOTE2
     parents = [('master',None)] # the None can hold extra data eg brace depth for SH
     atoms = [AtomMaster()]
@@ -299,6 +299,8 @@ def atomize1(tokenlist):
             #STAY IN SH
             else:
                 atoms[-1].add(as_tok)
+
+        ###### REST IS FOR OUTSIDE SH OUTSIDE QUOTE:
         # ENTER SH?
         elif t == Tok.SH_LBRACE:
             parents.append(('sh',{'brace_depth':1}))
@@ -426,7 +428,7 @@ def parse(line,debug=False):
     if debug:
         u.red("=Tokens=")
         print(tkns)
-    a = atomize1(tkns)
+    a = atomize(tkns)
     if debug:
         u.red("=Atoms=")
         print(a)

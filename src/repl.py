@@ -20,6 +20,7 @@ class Repl:
         return self.state
 
     def next(self):
+        if self.state.banner_cwd != os.getcwd(): self.update_banner()
         line = self.get_input()
         if line is None: return
         if len(line.strip()) == 0: return
@@ -71,7 +72,8 @@ class Repl:
 
     # the banner is like the '>>> ' in the python repl for example
     def update_banner(self):
-        prettycwd = pretty_path(os.getcwd())
+        self.state.banner_cwd = os.getcwd()
+        prettycwd = pretty_path(self.state.banner_cwd)
         if self.state.mode == 'normal':
             banner_txt = "es:"+prettycwd+" % "
             self.state.banner_uncoloredlen = len(banner_txt)

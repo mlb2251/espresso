@@ -46,6 +46,7 @@ init_state = {
         'mode':'normal',
         'banner':'>>> ',
         'banner_uncoloredlen':4,
+        'banner_cwd':'',
         'debug':False,
         'communicate': [],
         'verbose_exceptions':False,
@@ -136,6 +137,7 @@ class ReplState:
         self.mode=value_dict["mode"]    # 'normal' or 'speedy'
         self.banner=value_dict["banner"] #the banner is that thing that looks like '>>> ' in the python interpreter for example
         self.banner_uncoloredlen=value_dict["banner_uncoloredlen"] # the length of the banner, ignoring the meta chars used to color it
+        self.banner_cwd=value_dict["banner_cwd"] # the length of the banner, ignoring the meta chars used to color it
         self.debug=value_dict["debug"]  #if this is True then parser output is generated. You can toggle it with '!debug'
         self.communicate=value_dict["communicate"] # for passing messages between main.py and repl.py, for things like hard resets and stuff
         self.verbose_exceptions=value_dict['verbose_exceptions'] #if this is true then full raw exceptions are printed in addition to the formatted ones
