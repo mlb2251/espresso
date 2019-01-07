@@ -73,13 +73,13 @@ class Repl:
     def update_banner(self):
         prettycwd = pretty_path(os.getcwd())
         if self.state.mode == 'normal':
+            banner_txt = "es:"+prettycwd+" % "
+            self.state.banner_uncoloredlen = len(banner_txt)
+            self.state.banner = mk_blue(banner_txt)
+        if self.state.mode == 'speedy':
             banner_txt = "es:"+prettycwd+" $ "
             self.state.banner_uncoloredlen = len(banner_txt)
             self.state.banner = mk_green(banner_txt)
-        if self.state.mode == 'speedy':
-            banner_txt = "es:"+prettycwd+" $ %"
-            self.state.banner_uncoloredlen = len(banner_txt)
-            self.state.banner = mk_purple(banner_txt)
 
     # prompts user for input and returns the line they enter.
     def get_input(self):
@@ -156,7 +156,6 @@ class Repl:
             # earlier version, look back thru the git repository if you need it. However
             # really you should be able to just divide up your input and call run_code multiple
             # times with the pieces.
-            u.red(codestring)
             as_ast = ast.parse(codestring,mode='single') # parse into a python ast object
             as_ast = ast.fix_missing_locations(as_ast)
             code = compile(as_ast,'<ast>','single')
