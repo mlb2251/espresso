@@ -36,6 +36,7 @@ prelude = [
     "import backend",
     "os.chdir(\""+os.getcwd()+"\")",
     "BACKEND_PIPE_IN,BACKEND_PIPE_OUT = backend.init_sh_backend()",
+    "backend.setup_displayhook()",
     ]
 # initial state of the REPL
 init_state = {

@@ -11,15 +11,22 @@ import os
 import util as u
 import subprocess as sp
 
+def setup_displayhook():
+    def displayhook(v):
+        if v is not None:
+            print(v)
+    sys.displayhook = displayhook
 
 #def disablePrint(): sys.stdout = open(os.devnull, 'w')
 #def enablePrint(): sys.stdout = sys.__stdout__
 
 def recv(pipe):
-    return open(pipe).read().strip()
+    res = open(pipe).read().strip()
+    #u.red(res)
+    return res
 
 def send(s,pipe):
-    u.blue("send:"+s)
+    u.blue("sending:"+s)
     open(pipe,'w').write('cd '+os.getcwd()+';'+s)
 
 # create a new pipe
