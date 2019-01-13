@@ -57,7 +57,7 @@ class Tok(Enum):
 macro_argc = {
     'argc':0,
     'argv':0,
-    'basepath':1,
+    'basename':1,
     'blue':1,
     'cat':1,
     'cd':1,

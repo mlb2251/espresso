@@ -78,11 +78,11 @@ class Repl:
         if self.state.mode == 'normal':
             banner_txt = "es:"+prettycwd+" > "
             self.state.banner_uncoloredlen = len(banner_txt)
-            self.state.banner = mk_blue(banner_txt)
+            self.state.banner = mk_green(banner_txt)
         if self.state.mode == 'speedy':
             banner_txt = "es:"+prettycwd+" $ "
             self.state.banner_uncoloredlen = len(banner_txt)
-            self.state.banner = mk_green(banner_txt)
+            self.state.banner = mk_yellow(banner_txt)
 
     # prompts user for input and returns the line they enter.
     def get_input(self):
