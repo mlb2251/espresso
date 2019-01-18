@@ -26,7 +26,7 @@ def recv(pipe):
     return res
 
 def send(s,pipe):
-    u.blue("sending:"+s)
+    #u.blue("sending:"+s)
     open(pipe,'w').write('cd '+os.getcwd()+';'+s)
 
 # create a new pipe
