@@ -7,7 +7,116 @@ import ast
 
 import codegen
 import util as u
-from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_green,mk_purple,mk_underline,red,blue,green,yellow,purple,pretty_path
+from util import *
+
+###############################
+###############################
+# TODO solution to many issues:
+# enable CustomCompleterDisplayHook
+# make ' ' '\t' no longer delims so that 'text' is the full line
+# modify CustomCompleterDisplayHook hook to only print the part of the match at the end of the line
+# This enables us to do repls on the entire contents of the line! And '\ ' will not print funny or
+# anything like that anymore.
+###############################
+###############################
+
+
+# This segment sets up the interpreter to have history with arrows and tab based autocomplete
+import readline
+import rlcompleter
+import shlex
+
+# When attempting tab completion, completer() is called repeatedly until it returns
+# None. Each time it is called it should return the next item in the list of possible
+# completions. Its first call is done with state=0, then state=1, etc.
+# Therefore the actual os.listdir() only happens in state==0, and in all other states
+# we simply return the approrpiate file by indexing our file list using the 'state' int
+## Note one quirk: if there's a '\ ' in the filename the tab completion will only
+## show you the bit after the '\ ', tho in terms of behavior it'll act fine. This
+## is just bc we need to specify ' ' as a delimiter with set_completer_delim()
+readline.set_completer_delims(' \t\n/')
+
+
+class CustomCompleterDisplayHook:
+    def __init__(self,repl):
+        self.repl=repl
+    def __call__(self,searchtext,matches,longest_match_len):
+        term_width = os.popen('stty size', 'r').read().split()[1]
+        # TODO use term_width to pretty print the matches, also add color
+        print()
+        print('  '.join(matches))
+        print(self.repl.state.banner,readline.get_line_buffer(),sep='', end='')
+        sys.stdout.flush()
+
+def completer(text, state):
+    if state == 0:
+        # completer only gets the text AFTER the last ' '
+        # readline.get_line_buffer to get full line
+        # then grab the last item on the linewith shlex.split 
+        # *Note this only really is the deal with the '\ ' case
+        line = readline.get_line_buffer()
+        lastitem = shlex.split(line)[-1]
+        if lastitem[:2] == '~/':
+            lastitem = os.path.expanduser('~') + lastitem[1:]
+
+        # the folder to ls and the partial filename to use
+        folder = os.path.dirname(lastitem)
+        partial_fname = os.path.basename(lastitem)
+        if folder == '':
+            folder = '.'
+
+        # TODO can expand on this however you want, enabling '*' for example or whatever else
+        # (unfortunately the '*' may not work if it isn't successfully contained within the 'text'
+        # variable because thats what ends up getting replaced, so if * happens to act as a separator
+        # for 'text' like '-' is for example, it wouldn't work. Also you certainly couldn't have
+        # a '*' earlier in the line for the same substitution reason. 
+        # Tho if * expanded to exactly 1 thing maybe you could do it actually, tho the expansion
+        # wouldn't happen right here
+
+        # TODO readline.set_completion_display_matches_hook (custom displaying e.g. could color!!)
+
+        # could also be useful:
+        # readline.set_startup_hook readline.set_pre_input_hook
+        # readline.insert_text
+
+        files = os.listdir(folder)
+        for i in range(len(files)): # append '/' if it's a folder
+            if os.path.isdir(folder+'/'+files[i]):
+                files[i] += '/'
+        completer.options = [i for i in files if i.startswith(partial_fname)]
+        completer.partial_fname = partial_fname
+        completer.text = text
+    if state < len(completer.options):
+        # This simply returns the next tab completion result: completer.options[state].
+        # Unfortunately it looks a little more complex than that because of this situation:
+        # imagine you're completing 'some\ te' to get the file 'some\ test.txt'
+        # thus partial_fname = 'some\ te'
+        # and text = 'te' (due to readline stupidity)
+        # however the completer() is supposed to return whatever is replacing _text_ not
+        # whatever is replacing partial_fname, since _text_ is the official thing it gave us.
+        # So we actually want to return 'st.txt' rather than 'some-test.txt'
+        # hence this substringing / fancy indexing. 
+        return completer.options[state][completer.partial_fname.rindex(completer.text):].replace(' ',r'\ ')
+    else:
+        return None
+
+readline.parse_and_bind("tab: complete")
+readline.set_completer(completer)
+histfile = os.path.join(u.error_path+'eshist')
+try:
+    readline.read_history_file(histfile)
+    # default history len is -1 (infinite), which may grow unruly
+    readline.set_history_length(1000)
+except IOError:
+    pass
+import atexit
+atexit.register(readline.write_history_file, histfile)
+
+
+del histfile, rlcompleter
+
+
+
 
 
 # this is the Repl called from main.py
@@ -15,6 +124,7 @@ from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_gr
 class Repl:
     def __init__(self,state):
         self.state=state #self.state is a ReplState (defined in main.py, intentionally not here for reload() reasons)
+        #readline.set_completion_display_matches_hook(CustomCompleterDisplayHook(self)) # TODO uncomment
 
     def get_state(self):
         return self.state
