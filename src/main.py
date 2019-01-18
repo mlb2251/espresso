@@ -20,12 +20,16 @@ import shlex
 # completions. Its first call is done with state=0, then state=1, etc.
 # Therefore the actual os.listdir() only happens in state==0, and in all other states
 # we simply return the approrpiate file by indexing our file list using the 'state' int
+## Note one quirk: if there's a '\ ' in the filename the tab completion will only
+## show you the bit after the '\ ', tho in terms of behavior it'll act fine. This
+## is just bc we need to specify ' ' as a delimiter with set_completer_delim()
+readline.set_completer_delims(' \t\n/')
 def completer(text, state):
     if state == 0:
-        # completer only gets the text AFTER the last '/' or '-' or maybe
-        # other chars, hence we use readline.get_line_buffer to get full line
+        # completer only gets the text AFTER the last ' '
+        # readline.get_line_buffer to get full line
         # then grab the last item on the linewith shlex.split 
-        # (shlex handles the '\ ' case too!)
+        # *Note this only really is the deal with the '\ ' case
         line = readline.get_line_buffer()
         lastitem = shlex.split(line)[-1]
         if lastitem[:2] == '~/':
@@ -37,11 +41,6 @@ def completer(text, state):
         if folder == '':
             folder = '.'
 
-        # TODO readline.set_completer_delims (to remove the issues with '/' and '-' etc being
-        # separators. This is actually *SUPER* powerful because it could make my whole '*' thing
-        # or whatever other things work because suddenly we're allowed to replace a much larger
-        # range of text!!!!!!!! Bc 'text' will capture a larger area which means we can
-        # replace on a larger area!!!
 
         # TODO can expand on this however you want, enabling '*' for example or whatever else
         # (unfortunately the '*' may not work if it isn't successfully contained within the 'text'
@@ -68,14 +67,14 @@ def completer(text, state):
     if state < len(completer.options):
         # This simply returns the next tab completion result: completer.options[state].
         # Unfortunately it looks a little more complex than that because of this situation:
-        # imagine you're completing 'some-te' to get the file 'some-test.txt'
-        # thus partial_fname = 'some-te'
+        # imagine you're completing 'some\ te' to get the file 'some\ test.txt'
+        # thus partial_fname = 'some\ te'
         # and text = 'te' (due to readline stupidity)
         # however the completer() is supposed to return whatever is replacing _text_ not
         # whatever is replacing partial_fname, since _text_ is the official thing it gave us.
         # So we actually want to return 'st.txt' rather than 'some-test.txt'
         # hence this substringing / fancy indexing. 
-        return completer.options[state][completer.partial_fname.rindex(completer.text):]
+        return completer.options[state][completer.partial_fname.rindex(completer.text):].replace(' ',r'\ ')
     else:
         return None
 
