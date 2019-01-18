@@ -7,13 +7,80 @@ from copy import deepcopy
 
 import codegen
 import util as u
-from util import die,warn,mk_blue,mk_red,mk_yellow,mk_cyan,mk_bold,mk_gray,mk_green,mk_purple,mk_underline,red,blue,green,yellow,purple,pretty_path
+from util import *
 import repl
 
 # This segment sets up the interpreter to have history with arrows and tab based autocomplete
 import readline
 import rlcompleter
+import shlex
+
+# When attempting tab completion, completer() is called repeatedly until it returns
+# None. Each time it is called it should return the next item in the list of possible
+# completions. Its first call is done with state=0, then state=1, etc.
+# Therefore the actual os.listdir() only happens in state==0, and in all other states
+# we simply return the approrpiate file by indexing our file list using the 'state' int
+def completer(text, state):
+    if state == 0:
+        # completer only gets the text AFTER the last '/' or '-' or maybe
+        # other chars, hence we use readline.get_line_buffer to get full line
+        # then grab the last item on the linewith shlex.split 
+        # (shlex handles the '\ ' case too!)
+        line = readline.get_line_buffer()
+        lastitem = shlex.split(line)[-1]
+        if lastitem[:2] == '~/':
+            lastitem = os.path.expanduser('~') + lastitem[1:]
+
+        # the folder to ls and the partial filename to use
+        folder = os.path.dirname(lastitem)
+        partial_fname = os.path.basename(lastitem)
+        if folder == '':
+            folder = '.'
+
+        # TODO readline.set_completer_delims (to remove the issues with '/' and '-' etc being
+        # separators. This is actually *SUPER* powerful because it could make my whole '*' thing
+        # or whatever other things work because suddenly we're allowed to replace a much larger
+        # range of text!!!!!!!! Bc 'text' will capture a larger area which means we can
+        # replace on a larger area!!!
+
+        # TODO can expand on this however you want, enabling '*' for example or whatever else
+        # (unfortunately the '*' may not work if it isn't successfully contained within the 'text'
+        # variable because thats what ends up getting replaced, so if * happens to act as a separator
+        # for 'text' like '-' is for example, it wouldn't work. Also you certainly couldn't have
+        # a '*' earlier in the line for the same substitution reason. 
+        # Tho if * expanded to exactly 1 thing maybe you could do it actually, tho the expansion
+        # wouldn't happen right here
+
+        # TODO readline.set_completion_display_matches_hook (custom displaying e.g. could color!!)
+
+        # could also be useful:
+        # readline.set_startup_hook readline.set_pre_input_hook
+        # readline.insert_text
+
+
+        files = os.listdir(folder)
+        for i in range(len(files)): # append '/' if it's a folder
+            if os.path.isdir(folder+'/'+files[i]):
+                files[i] += '/'
+        completer.options = [i for i in files if i.startswith(partial_fname)]
+        completer.partial_fname = partial_fname
+        completer.text = text
+    if state < len(completer.options):
+        # This simply returns the next tab completion result: completer.options[state].
+        # Unfortunately it looks a little more complex than that because of this situation:
+        # imagine you're completing 'some-te' to get the file 'some-test.txt'
+        # thus partial_fname = 'some-te'
+        # and text = 'te' (due to readline stupidity)
+        # however the completer() is supposed to return whatever is replacing _text_ not
+        # whatever is replacing partial_fname, since _text_ is the official thing it gave us.
+        # So we actually want to return 'st.txt' rather than 'some-test.txt'
+        # hence this substringing / fancy indexing. 
+        return completer.options[state][completer.partial_fname.rindex(completer.text):]
+    else:
+        return None
+
 readline.parse_and_bind("tab: complete")
+readline.set_completer(completer)
 histfile = os.path.join(u.error_path+'eshist')
 try:
     readline.read_history_file(histfile)
@@ -23,7 +90,19 @@ except IOError:
     pass
 import atexit
 atexit.register(readline.write_history_file, histfile)
+
+
+
+
+
+
+
 del histfile, rlcompleter
+
+
+
+
+
 
 ## apparently theres a way to make your own completer! Would be great
 
