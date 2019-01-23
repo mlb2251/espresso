@@ -10,6 +10,7 @@ data_path = homedir+'/.espresso/'
 error_path = data_path+'error_handling/'
 repl_path = data_path+'repl-tmpfiles/'
 pipe_dir = data_path+'pipes/'
+PWD_dir = data_path+'PWD-files/'
 
 # initialize dirs used by espresso
 def init_dirs():

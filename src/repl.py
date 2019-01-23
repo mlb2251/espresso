@@ -257,12 +257,7 @@ class Repl:
             new_code += [codegen.parse(line,debug=self.state.debug) for line in lines]
         else:
             if self.state.mode == 'speedy':
-                line = line.strip()
-                toks = line.split(' ')
-                if line[:3] == 'cd ':
-                    line = '%cd "'+' '.join(toks[1:])+'"'
-                else:
-                    line = 'sh{'+line+'}'
+                line = 'sh '+line.strip()
             # SPEEDY/NORMAL MODE
             new_code.append(codegen.parse(line,debug=self.state.debug))
             #to_undo = 1

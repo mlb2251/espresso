@@ -20,47 +20,76 @@ def setup_displayhook():
 #def disablePrint(): sys.stdout = open(os.devnull, 'w')
 #def enablePrint(): sys.stdout = sys.__stdout__
 
-def recv(pipe):
-    res = open(pipe).read().strip()
-    #u.red(res)
-    return res
 
-def send(s,pipe):
-    #u.blue("sending:"+s)
-    open(pipe,'w').write('cd '+os.getcwd()+';'+s)
-
+## From old method of sh backend
+#def recv(pipe):
+#    res = open(pipe).read().strip()
+#    #u.red(res)
+#    return res
+#
+#def send(s,pipe):
+#    #u.blue("sending:"+s)
+#    open(pipe,'w').write('cd '+os.getcwd()+';'+s)
+#
 # create a new pipe
 # popen a backend_sh.sh with the pipe
 # also return the pipe's file path
-def init_sh_backend():
-    i=0
-    in_pipe = u.pipe_dir+str(i)+'_in'
-    while os.path.exists(in_pipe):
-        i += 1
-        in_pipe = u.pipe_dir+str(i)+'_in'
-    out_pipe = u.pipe_dir+str(i)+'_out'
-    os.mkfifo(in_pipe)
-    os.mkfifo(out_pipe)
+#def init_sh_backend():
+#    i=0
+#    in_pipe = u.pipe_dir+str(i)+'_in'
+#    while os.path.exists(in_pipe):
+#        i += 1
+#        in_pipe = u.pipe_dir+str(i)+'_in'
+#    out_pipe = u.pipe_dir+str(i)+'_out'
+#    os.mkfifo(in_pipe)
+#    os.mkfifo(out_pipe)
+#
+#    sp.Popen(['/bin/bash',u.src_path+'backend_sh.sh',in_pipe,out_pipe])
+#
+#    return in_pipe,out_pipe
 
-    sp.Popen(['/bin/bash',u.src_path+'backend_sh.sh',in_pipe,out_pipe])
-
-    return in_pipe,out_pipe
-
-def sh(s,in_pipe,out_pipe):
+# capture_output = True: acts like normal $() in bash
+# ie captures stdout and doesn't print it to the screen.
+# if you do $(vim) for example in normal bash no output
+# is shown on the screen. Hence capture_output = False
+# for most interactive programs and True when you want
+# to save the output of a (usually non interactive) program
+# Note that in bash saving the output of an interactive program
+# is generally done by HEREDOCS which you should look into.
+# Returns None if capture_output = False
+## could do heredocs with the stdin pipe of run() probably and
+## make them behave just like bash heredocs (only one big input
+## not able to react to stdout or anything)
+def sh(s,capture_output=True):
     if len(s) == 0: return ''
     if s[-1] != '\n': s = s + '\n'
     if s.count('\n') > 1:
-        raise VerbatimException(mk_yellow("can't take more than one line in SH. this can totally be improved upon in the future! just change the bash backend script to use read -d or something like that and play around with it, or have a special message you send to the backend that tells it to keep reading lines until it gets a line ender special signal"))
-    send(s,in_pipe)
-    res = recv(out_pipe)
-    return res
+        raise VerbatimException(mk_yellow("can't take more than one line in SH. this can totally be improved upon in the future! just change the bash backend script"))
+
+    stdout = sp.PIPE if capture_output else None
+    res = sp.run(['/bin/bash',u.src_path+'backend.sh',s],stdout=stdout)
+    new_dir_file = '.{}.PWD'.format(os.getpid())
+    new_dir = open(new_dir_file).read().strip()
+    os.remove(new_dir_file)
+    os.chdir(new_dir)
+    if not capture_output:
+        return
+    text =  res.stdout.decode("utf-8")
+    if text == '': return text
+    if text[-1] == '\n': text = text[:-1]
+    return text
+
+
+    #mode = 'capture' if capture_output else 'nocapture'
+    #stdout = open(stdout_file).read()
+
+
+    #send(s,in_pipe)
+    #res = recv(out_pipe)
 
     #s = s.replace('echo','/bin/echo') #there is prob a better way...
     #res = sp.run(s,shell=True,stdout=sp.PIPE,stderr=sp.PIPE)
-    #text =  res.stdout.decode("utf-8")
-    #if text == '': return text
-    #if text[-1] == '\n': text = text[:-1]
-    #return text
+
 
 #print(sh('echo -n test'))
 

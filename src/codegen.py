@@ -27,6 +27,7 @@ class Tok(Enum):
     PERIOD     = re.compile(r'\.')
     EQ     = re.compile(r'=')
     SH_LBRACE     = re.compile(r'sh{')
+    SH_LINESTART     = re.compile(r'sh\s+')
     LPAREN    = re.compile(r'\(')
     RPAREN    = re.compile(r'\)')
     LBRACE    = re.compile(r'{')
@@ -43,7 +44,7 @@ class Tok(Enum):
     IDENTIFIER= re.compile(r'(\w+)')
     UNKNOWN   = re.compile(r'(.)')
     def __repr__(self):
-        if self.name == "SH_LBRACE":
+        if self.name in ["SH_LINESTART","SH_LBRACE"]:
             return u.mk_green(self.name)
         if self.name == "MACROHEAD":
             return u.mk_purple(self.name)
@@ -101,20 +102,28 @@ class Token:
 
 # turns a string into a list of Tokens
 def tokenize(s):
-    if s == '': return []
-    for i in list(Tok):
-        name = i.name
-        match = i.value.match(s)
-        if match is None: continue
-        remaining = s[match.end():]
-        grps = match.groups()
-        if len(grps) == 0:
-            data = ''
-        else:
-            data = grps[0]
-        return [Token(i,data,match.group())] + tokenize(remaining)
-    print("Error: Can't tokenize. This should be impossible because UNKNOWN token should be registered")
-    exit(1)
+    remaining = s
+    tkns = []
+    while remaining != '':
+        for t in list(Tok):
+            name = t.name
+            match = t.value.match(remaining)
+            # 'continue' if no match
+            if match is None: continue
+            # 'continue' if sh_linestart isn't at start of line
+            if t == Tok.SH_LINESTART and remaining != s: continue
+
+            remaining = remaining[match.end():]
+            grps = match.groups()
+            data = grps[0] if grps else '' # [] is nontruthy
+            tkns.append(Token(t,data,match.group()))
+            break #break unless you 'continue'd before
+    return tkns
+
+#def sanitize_tkns(tkns):
+    #for i,t in enumerate(tkns):
+        #if i != 0 and t.tok == Tok.SH_LINESTART:
+            #tkns[i] = Token(Tok.IDENTIFIER
 
 #def p(tokenlist):
 #    print(' '.join([t.__repr__() for (t,data) in tokenlist]))
@@ -167,7 +176,11 @@ class AtomMaster(AtomCompound):
 class AtomSH(AtomCompound):
     def gentext(self):
         body = ''.join([x.gentext() for x in self]).replace('"','\\"').replace('\1CONSERVEDQUOTE\1','"') # escape any quotes inside
-        return 'backend.sh("' + body + '",BACKEND_PIPE_IN,BACKEND_PIPE_OUT)'
+        return 'backend.sh("' + body + '")'
+class AtomSHLine(AtomCompound):
+    def gentext(self):
+        body = ''.join([x.gentext() for x in self]).replace('"','\\"').replace('\1CONSERVEDQUOTE\1','"') # escape any quotes inside
+        return 'backend.sh("' + body + '",capture_output=False)'
 class AtomQuote(AtomCompound):
     def __init__(self,tok):
         super().__init__()
@@ -258,9 +271,9 @@ def atomize(tokenlist):
     def parent_atom(): return atoms[-1]
     for token in tokenlist:
         t = token.tok #the Tok
-        if t == Tok.DOLLARVAR and parent() == 'sh':
+        if t == Tok.DOLLARVAR and parent() in ['sh_brace','sh_line']:
             as_tok = AtomDollar(token,'interp')
-        elif t == Tok.DOLLARVAR and parent() != 'sh':
+        elif t == Tok.DOLLARVAR and parent() not in ['sh_brace','sh_line']:
             as_tok = AtomDollar(token,'global')
         else:
             as_tok = AtomTok(token)
@@ -281,19 +294,22 @@ def atomize(tokenlist):
         # IF IN SH, then we don't care about anything but { } counting and DollarParens
         # everything else is flattened (so no worries about needing to recurse or keep track
         # of having a sh{} somewhere earlier on the stack)
-        elif parent() == 'sh':
-            if t == Tok.SH_LBRACE: die("SH_LBRACE inside of an sh{}")
-            elif t == Tok.LBRACE:
-                data()['brace_depth'] += 1
-            elif t == Tok.RBRACE:
-                data()['brace_depth'] -= 1
-                # LEAVE SH
-                if data()['brace_depth'] == 0:
-                    assertInst(atoms[-1],AtomSH)
-                    parents.pop()
-                    atoms[-2].add(atoms.pop())
+        elif parent() in ['sh_brace','sh_line']:
+            if parent() == 'sh_brace':
+                if t == Tok.SH_LBRACE: die("SH_LBRACE inside of an sh{}")
+                elif t == Tok.LBRACE:
+                    data()['brace_depth'] += 1
+                    continue #these continues are important
+                elif t == Tok.RBRACE:
+                    data()['brace_depth'] -= 1
+                    # LEAVE SH
+                    if data()['brace_depth'] == 0:
+                        assertInst(atoms[-1],AtomSH)
+                        parents.pop()
+                        atoms[-2].add(atoms.pop())
+                    continue #these continues are important
             # ENTER DOLLARPARENS? (only possible from within SH)
-            elif t == Tok.DOLLARPAREN:
+            if t == Tok.DOLLARPAREN:
                 parents.append('dollarparens')
                 atoms.append(AtomDollarParens())
             #STAY IN SH
@@ -303,8 +319,11 @@ def atomize(tokenlist):
         ###### REST IS FOR OUTSIDE SH OUTSIDE QUOTE:
         # ENTER SH?
         elif t == Tok.SH_LBRACE:
-            parents.append(('sh',{'brace_depth':1}))
+            parents.append(('sh_brace',{'brace_depth':1}))
             atoms.append(AtomSH())
+        elif t == Tok.SH_LINESTART:
+            parents.append(('sh_line',None))
+            atoms.append(AtomSHLine())
         # OPEN PARENS
         elif t == Tok.LPAREN:
             parents.append(('parens',None))
@@ -316,6 +335,10 @@ def atomize(tokenlist):
             atoms[-2].add(atoms.pop())
         else:
             atoms[-1].add(as_tok)
+    if len(atoms) == 2 and parent() == 'sh_line':
+        assertInst(atoms[-1],AtomSHLine)
+        parents.pop()
+        atoms[-2].add(atoms.pop())
     if len(atoms) != 1: die("There should only be the MASTER left in the 'atoms' list! Actual contents:"+str(atoms))
     return atoms.pop()
 
@@ -425,6 +448,7 @@ def parse(line,debug=False):
         u.red("=Input=")
         print(line)
     tkns = tokenize(line)
+    #tkns = sanitize_tkns(tkns)
     if debug:
         u.red("=Tokens=")
         print(tkns)
