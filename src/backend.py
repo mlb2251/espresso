@@ -11,6 +11,7 @@ import os
 import util as u
 import subprocess as sp
 
+# this determines what eval() prints
 def setup_displayhook():
     def displayhook(v):
         if v is not None:

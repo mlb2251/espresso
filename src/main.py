@@ -30,13 +30,6 @@ try:
 except IOError:
     pass
 import atexit
-#print(readline.get_current_history_length())
-#if readline.get_current_history_length() > HISTMAX:
-#    for i in range(int(readline.get_current_history_length()/2)):
-#        readline.remove_history_item(1) # keep popping off oldest entries
-#    readline.write_history_file(histfile)
-#    u.blue(readline.get_current_history_length())
-#    print("hi")
 
 # write history on exiting
 atexit.register(readline.write_history_file, histfile)
@@ -61,7 +54,7 @@ init_state = {
         'globs':dict(), #TODO this should prob actually be set to whatever pythons initial globals() list is
         'locs':dict(),
         'code':prelude,
-        'mode':'normal',
+        'mode':'speedy',
         'banner':'>>> ',
         'banner_uncoloredlen':4,
         'banner_cwd':'',
@@ -115,7 +108,7 @@ def do_compile():
 
 # This is the important function
 def start_repl():
-    print(mk_green("Welcome to the ")+mk_bold(mk_yellow("Espresso"))+mk_green(" Language!"))
+    #print(mk_green("Welcome to the ")+mk_bold(mk_yellow("Espresso"))+mk_green(" Language!"))
 
     state = ReplState(deepcopy(init_state))
 
