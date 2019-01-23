@@ -17,6 +17,18 @@ from util import *
 # modify CustomCompleterDisplayHook hook to only print the part of the match at the end of the line
 # This enables us to do repls on the entire contents of the line! And '\ ' will not print funny or
 # anything like that anymore.
+# Another cool idea: have an '!' on the end of a line autocomplete to having 'temp=' at the start of the line
+# for rapid assignment stuff
+###############################
+###############################
+# given all this cool stuff you can probably also totally keylog and update the display manually with
+# custom highlighting. Note that writing your own custom highlighter for python syntax in python regex
+# w/ escape code coloring wd prob not be too hard.
+# *** note that if you do this you must make it OPTIONAL bc not using the native display-when-you-type
+# will be less lightweight and thus should be optional
+
+# oh also you should really do A) let you launch stuff like 'vim' and B) let you drop into vim
+# to edit multiline statements / past multiline statements
 ###############################
 ###############################
 
@@ -140,11 +152,13 @@ class Repl:
             self.state.mode = 'speedy'
             self.update_banner()
 
-        # deal with ! commands
+        # deal with '!' commands
         if self.try_metacommands(line):
             return
 
+        # generate a list of lines of valid python code
         new_code = self.gen_code(line)
+        # run the code, updating the self.globals/locals
         self.run_code(new_code)
 
     # handles ! commands and returns 'False' if none were detected
