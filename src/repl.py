@@ -112,7 +112,14 @@ def completer(text, state):
     else:
         return None
 
-readline.parse_and_bind("tab: complete")
+
+def set_tabcomplete(setting):
+    if setting:
+        readline.parse_and_bind("tab: complete")
+    else:
+        readline.parse_and_bind('tab: self-insert')
+
+set_tabcomplete(True)
 readline.set_completer(completer)
 
 
@@ -206,6 +213,7 @@ class Repl:
             # sys.modules['repl'] across all these files so that when main()
             # calls repl.Repl() next it will use the new one
             # reload all source files (branches out to EVERYTHING including backend and other things not directly imported here)
+            set_tabcomplete(True)
             line = input(self.state.banner)
             while True:
                 failed_mods = u.reload_modules(sys.modules,verbose=self.state.verbose_exceptions)
@@ -236,6 +244,7 @@ class Repl:
         new_code = [] #this is what we'll be adding our code to
         # MULTILINE STATEMENTS
         if line.strip()[-1] == ':': # start of an indent block
+            set_tabcomplete(False)
             if self.state.mode == 'speedy': print(mk_gray('dropping into normal mode for multiline'))
             lines = [line]
             while True:
