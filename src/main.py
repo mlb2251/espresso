@@ -10,6 +10,41 @@ import util as u
 from util import *
 import repl
 
+import readline
+histfile = os.path.join(u.error_path+'eshist')
+HISTMAX=1000
+
+# clear oldest history if needed
+with open(histfile,'r') as f:
+    text = f.read()
+    if text.count('\n') > HISTMAX:
+        listform = text.split('\n')
+        open(histfile,'w').write('\n'.join(listform[-HISTMAX//2:]))
+        del listform
+del text
+
+try:
+    readline.read_history_file(histfile)
+    # default history len is -1 (infinite), which may grow unruly
+    readline.set_history_length(-1)
+except IOError:
+    pass
+import atexit
+#print(readline.get_current_history_length())
+#if readline.get_current_history_length() > HISTMAX:
+#    for i in range(int(readline.get_current_history_length()/2)):
+#        readline.remove_history_item(1) # keep popping off oldest entries
+#    readline.write_history_file(histfile)
+#    u.blue(readline.get_current_history_length())
+#    print("hi")
+
+# write history on exiting
+atexit.register(readline.write_history_file, histfile)
+
+## note atexit.register() is a general cleanup fn for when your program randomly exits at any time -- worth looking at more!
+
+del histfile
+
 
 prgm_args = sys.argv[2:]    # often this is []
 
