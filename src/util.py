@@ -240,38 +240,36 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
 
 
 
-class cols:
-    MAGENTA = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKGREEN = '\033[92m'
-    FAIL = '\033[91m'
-    YELLOW = '\033[33m'
-    CYAN = '\033[36m'
-    GRAY = '\033[90m'
+from colorama import init
+init()
+from colorama import Fore, Back, Style
+# Fore: BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE, RESET.
+# Back: BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE, RESET.
+# Style: DIM, NORMAL, BRIGHT, RESET_ALL.
 
-
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+# \001 and \002 are used by readline to fix buggy prompt displaying when
+# browsing history (https://stackoverflow.com/questions/9468435/look-how-to-fix-column-calculation-in-python-readline-if-use-color-prompt)
+def color(s,c):
+    return '\001'+c+'\002'+str(s)+'\001'+Style.RESET_ALL+'\002'
 
 def mk_underline(s):
-    return cols.UNDERLINE+str(s)+cols.ENDC
+    return color(s,'\033[4m')
 def mk_green(s):
-    return cols.OKGREEN+str(s)+cols.ENDC
+    return color(s,Fore.GREEN)
 def mk_red(s):
-    return cols.FAIL+str(s)+cols.ENDC
+    return color(s,Fore.RED)
 def mk_purple(s):
-    return cols.MAGENTA+str(s)+cols.ENDC
+    return color(s,Fore.MAGENTA)
 def mk_blue(s):
-    return cols.OKBLUE+str(s)+cols.ENDC
+    return color(s,Fore.BLUE)
 def mk_cyan(s):
-    return cols.CYAN+str(s)+cols.ENDC
+    return color(s,Fore.CYAN)
 def mk_yellow(s):
-    return cols.YELLOW+str(s)+cols.ENDC
-def mk_gray(s):
-    return cols.GRAY+str(s)+cols.ENDC
+    return color(s,Fore.YELLOW)
 def mk_bold(s):
-    return cols.BOLD+str(s)+cols.ENDC
+    return color(s,'\033[1m')
+def mk_gray(s):
+    return color(s,'\033[90m')
 
 
 def pc(color,msg):
