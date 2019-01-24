@@ -142,10 +142,6 @@ class Repl:
         if line is None: return
         if len(line.strip()) == 0: return
         # for convenience, 'ls' or 'cd [anything]' will change the mode to speedy
-        if (line.strip() == 'ls' or line.strip()[:3] == 'cd ') and self.state.mode == 'normal':
-            print(mk_gray('implicit switch to speedy mode'))
-            self.state.mode = 'speedy'
-            self.update_banner()
 
         # deal with '!' commands
         if self.try_metacommands(line):
@@ -248,7 +244,7 @@ class Repl:
             if self.state.mode == 'speedy': print(mk_gray('dropping into normal mode for multiline'))
             lines = [line]
             while True:
-                line = input(mk_green('.'*self.state.banner_uncoloredlen))
+                line = input(mk_green(' '*(self.state.banner_uncoloredlen-1)+'|'))
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
                 lines.append(line)
             new_code += [codegen.parse(line,debug=self.state.debug) for line in lines]
