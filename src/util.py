@@ -252,8 +252,8 @@ from colorama import Fore, Back, Style
 def color(s,c):
     return '\001'+c+'\002'+str(s)+'\001'+Style.RESET_ALL+'\002'
 
-def mk_underline(s):
-    return color(s,'\033[4m')
+
+# color a string
 def mk_green(s):
     return color(s,Fore.GREEN)
 def mk_red(s):
@@ -266,26 +266,52 @@ def mk_cyan(s):
     return color(s,Fore.CYAN)
 def mk_yellow(s):
     return color(s,Fore.YELLOW)
-def mk_bold(s):
-    return color(s,'\033[1m')
 def mk_gray(s):
     return color(s,'\033[90m')
 
+# add style to string
+def mk_bold(s):
+    return color(s,'\033[1m')
+def mk_underline(s):
+    return color(s,'\033[4m')
 
-def pc(color,msg):
-    print(color+str(msg)+cols.ENDC)
-def red(msg):
-    pc(cols.BOLD+cols.FAIL,msg)
-def red_thin(msg):
-    pc(cols.FAIL,msg)
-def purple(msg):
-    pc(cols.MAGENTA,msg)
-def blue(msg):
-    pc(cols.OKBLUE,msg)
-def yellow(msg):
-    pc(cols.YELLOW,msg)
-def green(msg):
-    pc(cols.OKGREEN+cols.BOLD,msg)
+# color a string then print it immediately
+def green(s):
+    print(mk_green(s))
+def red(s):
+    print(mk_red(s))
+def purple(s):
+    print(mk_purple(s))
+def blue(s):
+    print(mk_blue(s))
+def cyan(s):
+    print(mk_cyan(s))
+def yellow(s):
+    print(mk_yellow(s))
+def gray(s):
+    print(mk_gray(s))
+
+# add style to a string the print it immediately
+def bold(s):
+    print(mk_bold(s))
+def underline(s):
+    print(mk_underline(s))
+
+# color and BOLD a string then print it immediately
+def bgreen(s):
+    print(mk_green(mk_bold(s)))
+def bred(s):
+    print(mk_red(mk_bold(s)))
+def bpurple(s):
+    print(mk_purple(mk_bold(s)))
+def bblue(s):
+    print(mk_blue(mk_bold(s)))
+def bcyan(s):
+    print(mk_cyan(mk_bold(s)))
+def byellow(s):
+    print(mk_yellow(mk_bold(s)))
+def bgray(s):
+    print(mk_gray(mk_bold(s)))
 
 
 # you can actually run this file and use it to format any exception you get.
