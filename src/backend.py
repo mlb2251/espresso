@@ -18,6 +18,7 @@ def setup_displayhook():
             print(v)
     sys.displayhook = displayhook
 
+
 #def disablePrint(): sys.stdout = open(os.devnull, 'w')
 #def enablePrint(): sys.stdout = sys.__stdout__
 
@@ -63,15 +64,15 @@ def setup_displayhook():
 ## not able to react to stdout or anything)
 def sh(s,capture_output=True):
     if len(s) == 0: return ''
-    if s[-1] != '\n': s = s + '\n'
-    if s.count('\n') > 1:
-        raise VerbatimException(mk_yellow("can't take more than one line in SH. this can totally be improved upon in the future! just change the bash backend script"))
+
+    s += '\necho $PWD > {}'.format(u.pwd_file)
 
     stdout = sp.PIPE if capture_output else None
-    res = sp.run(['/bin/bash',u.src_path+'backend.sh',s],stdout=stdout)
-    new_dir_file = '.{}.PWD'.format(os.getpid())
-    new_dir = open(new_dir_file).read().strip()
-    os.remove(new_dir_file)
+    #/bin/bash -O expand_aliases -i -c 'ls'
+    #res = sp.run(['/bin/bash',u.src_path+'backend.sh',s],stdout=stdout)
+    sp.run(['/bin/bash','-O','expand_aliases','-l','-c',s],stdout=stdout)
+    new_dir = open(u.pwd_file).read().strip()
+    os.remove(u.pwd_file)
     os.chdir(new_dir)
     if not capture_output:
         return

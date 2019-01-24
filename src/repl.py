@@ -213,7 +213,7 @@ class Repl:
             # sys.modules['repl'] across all these files so that when main()
             # calls repl.Repl() next it will use the new one
             # reload all source files (branches out to EVERYTHING including backend and other things not directly imported here)
-            set_tabcomplete(True)
+            set_tabcomplete(True) # just put this here in case it gets set to False by multiline then somehow the interpreter drops out intoj
             line = input(self.state.banner)
             while True:
                 failed_mods = u.reload_modules(sys.modules,verbose=self.state.verbose_exceptions)

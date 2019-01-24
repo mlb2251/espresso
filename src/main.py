@@ -1,3 +1,5 @@
+#!/usr/local/bin/python3
+## NOTE THAT THIS IS NOT THE PATH TO PYTHON# ON EVERYONES COMPUTER SO IT PROB WONT WORK FOR MOST PPL SO FIX THAT SHIT
 # MAIN
 
 from importlib import reload

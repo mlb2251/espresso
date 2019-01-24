@@ -8,13 +8,13 @@ src_path = os.path.dirname(os.path.realpath(__file__))+'/'
 #src_path = homedir+'/espresso/src/'
 data_path = homedir+'/.espresso/'
 error_path = data_path+'error_handling/'
-repl_path = data_path+'repl-tmpfiles/'
-pipe_dir = data_path+'pipes/'
-PWD_dir = data_path+'PWD-files/'
+#repl_path = data_path+'repl-tmpfiles/'
+#pipe_dir = data_path+'pipes/'
+pwd_file = data_path+'.{}.PWD'.format(os.getpid())
 
 # initialize dirs used by espresso
 def init_dirs():
-    dirs = [src_path,data_path,error_path,pipe_dir]
+    dirs = [src_path,data_path,error_path]
     for d in dirs:
         if not os.path.isdir(d):
             blue('created:'+d)
