@@ -70,7 +70,7 @@ def sh(s,capture_output=True):
     stdout = sp.PIPE if capture_output else None
     #/bin/bash -O expand_aliases -i -c 'ls'
     #res = sp.run(['/bin/bash',u.src_path+'backend.sh',s],stdout=stdout)
-    sp.run(['/bin/bash','-O','expand_aliases','-O','checkwinsize','-l','-c',s],stdout=stdout)
+    res = sp.run(['/bin/bash','-O','expand_aliases','-O','checkwinsize','-l','-c',s],stdout=stdout)
     new_dir = open(u.pwd_file).read().strip()
     os.remove(u.pwd_file)
     os.chdir(new_dir)
