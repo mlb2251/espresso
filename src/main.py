@@ -54,7 +54,7 @@ prelude = [
 # initial state of the REPL
 init_state = {
         'globs':dict(), #TODO this should prob actually be set to whatever pythons initial globals() list is
-        'locs':dict(),
+        #'locs':dict(),
         'code':prelude,
         'mode':'speedy',
         'banner':'>>> ',
@@ -145,7 +145,7 @@ def start_repl():
 class ReplState:
     def __init__(self,value_dict):
         self.globs=value_dict["globs"]  # globals dict used by exec()
-        self.locs=value_dict["locs"]    # locals dict used by exec()
+        #self.locs=value_dict["locs"]    # locals dict used by exec()
         self.code=value_dict["code"]    # a list containing all the generated python code so far. Each successful line the REPL runs is added to this
         self.mode=value_dict["mode"]    # 'normal' or 'speedy'
         self.banner=value_dict["banner"] #the banner is that thing that looks like '>>> ' in the python interpreter for example

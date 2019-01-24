@@ -273,7 +273,7 @@ class Repl:
             as_ast = ast.parse(codestring,mode='single') # parse into a python ast object
             as_ast = ast.fix_missing_locations(as_ast)
             code = compile(as_ast,'<ast>','single')
-            exec(code,self.state.globs,self.state.locs)
+            exec(code,self.state.globs) #passing locals in causes it to only update locals and not globals, when really we just want globals to be updated
             #print(ast.dump(as_ast))
             self.state.code += new_code # keep track of successfully executed code
         except u.VerbatimExc as e:
