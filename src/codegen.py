@@ -137,6 +137,7 @@ class AtomCompound:
     def add(self,atom):
         #magenta("adding "+str(atom)+" to "+str(self.__class__))
         self.data.append(atom)
+    def parse
     def __repr__(self):
         return self.pretty()
     def __str__(self):
@@ -168,8 +169,50 @@ class AtomCompound:
 # may want to give custom codegen bodies later
 # wow super dumb python bug: never have __init__(self,data=[]) bc by putting '[]' in the argument only ONE copy exists of it for ALL instances of the class. This is very dumb but in python only one instance of each default variable exists and it gets reused.
 
+class TokenIter:
+    def __init__(self,token_list):
+        self.token_list = token_list
+        self.idx = 0
+    def __next__(self):
+        if self.idx >= len(self.token_list):
+            return None
+        self.idx += 1
+        return self.token_list[self.idx-1]
+    def ignore_whitespace(self):
+        while next(self) == tok.WHITESPACE: pass
+        self.idx -= 1 # it's rewind time boys
+
+# token_list = tokenize(line)
+# atoms = AtomMaster(line)
+
 #The parent atom for a line of code
 class AtomMaster(AtomCompound):
+    def __init__(self,tkns):
+        t = next(tkns)
+        if t == Tok.SH_LINESTART:
+            AtomSHLine(tkns)
+            assert(next(tkns) is None) # code in a more kind way. Make a util.asrt() or something
+        while t is not None:
+            if t == Tok.QUOTE1:
+                pass
+            elif t == Tok.QUOTE2:
+                pass
+            elif t == Tok.LPAREN:
+                pass
+            elif t == Tok.LBRACE:
+                pass
+            elif t == Tok.LBRACKET:
+                pass
+            elif t == Tok.DOLLARPAREN:
+                pass
+            elif t == Tok.SH_LBRACE:
+                pass
+            elif t == Tok.MACROHEAD:
+                pass
+
+            t = next(tkns)
+
+
     def gentext(self):
         return ''.join([x.gentext() for x in self])
 # the sh{} atom
@@ -185,6 +228,8 @@ class AtomQuote(AtomCompound):
     def __init__(self,tok):
         super().__init__()
         self.tok = tok #to keep track of ' vs "
+    def parse(self,state):
+        state.
     def gentext(self):
         return self.tok.verbatim + ''.join([x.gentext() for x in self]) + self.tok.verbatim
 
