@@ -120,13 +120,25 @@ def tokenize(s):
             break #break unless you 'continue'd before
     return tkns
 
-#def sanitize_tkns(tkns):
-    #for i,t in enumerate(tkns):
-        #if i != 0 and t.tok == Tok.SH_LINESTART:
-            #tkns[i] = Token(Tok.IDENTIFIER
 
-#def p(tokenlist):
-#    print(' '.join([t.__repr__() for (t,data) in tokenlist]))
+
+# may want to give custom codegen bodies later
+# wow super dumb python bug: never have __init__(self,data=[]) bc by putting '[]' in the argument only ONE copy exists of it for ALL instances of the class. This is very dumb but in python only one instance of each default variable exists and it gets reused.
+
+class TokenIter:
+    def __init__(self,token_list):
+        self.token_list = token_list
+        self.idx = 0
+    def __next__(self):
+        if self.idx >= len(self.token_list):
+            return None
+        self.idx += 1
+        return self.token_list[self.idx-1]
+    def peek(self):
+        return self.token_list[self.idx]
+    def ignore_whitespace(self):
+        while next(self) == tok.WHITESPACE: pass
+        self.idx -= 1 # it's rewind time boys
 
 
 # An atom that contains a list of other atoms. e.g. AtomParen
@@ -137,7 +149,6 @@ class AtomCompound:
     def add(self,atom):
         #magenta("adding "+str(atom)+" to "+str(self.__class__))
         self.data.append(atom)
-    def parse
     def __repr__(self):
         return self.pretty()
     def __str__(self):
@@ -166,70 +177,80 @@ class AtomCompound:
     def __len__(self):
         return len(self.data)
 
-# may want to give custom codegen bodies later
-# wow super dumb python bug: never have __init__(self,data=[]) bc by putting '[]' in the argument only ONE copy exists of it for ALL instances of the class. This is very dumb but in python only one instance of each default variable exists and it gets reused.
-
-class TokenIter:
-    def __init__(self,token_list):
-        self.token_list = token_list
-        self.idx = 0
-    def __next__(self):
-        if self.idx >= len(self.token_list):
-            return None
-        self.idx += 1
-        return self.token_list[self.idx-1]
-    def ignore_whitespace(self):
-        while next(self) == tok.WHITESPACE: pass
-        self.idx -= 1 # it's rewind time boys
-
-# token_list = tokenize(line)
-# atoms = AtomMaster(line)
 
 #The parent atom for a line of code
 class AtomMaster(AtomCompound):
     def __init__(self,tkns):
+        super().__init__()
         t = next(tkns)
         if t == Tok.SH_LINESTART:
             AtomSHLine(tkns)
             assert(next(tkns) is None) # code in a more kind way. Make a util.asrt() or something
+        # Enter: Quote1/2, Paren/Brace/Bracket, Sh_brace
+        # Default to AtomTok: DollarParen, AtomDollar, etc
         while t is not None:
             if t == Tok.QUOTE1:
-                pass
+                atom = AtomQuote1(tkns)
             elif t == Tok.QUOTE2:
-                pass
+                atom = AtomQuote2(tkns)
             elif t == Tok.LPAREN:
-                pass
+                atom = AtomParen(tkns)
             elif t == Tok.LBRACE:
-                pass
+                atom = AtomBrace(tkns)
             elif t == Tok.LBRACKET:
-                pass
-            elif t == Tok.DOLLARPAREN:
-                pass
+                atom = AtomBracket(tkns)
             elif t == Tok.SH_LBRACE:
-                pass
-            elif t == Tok.MACROHEAD:
-                pass
-
+                atom = AtomSHBrace(tkns)
+            else: ## DollarParen included! and AtomDollar (for now at least)
+                atom = AtomTok(tkns)
+            self.add(atom)
             t = next(tkns)
-
-
     def gentext(self):
         return ''.join([x.gentext() for x in self])
+
 # the sh{} atom
-class AtomSH(AtomCompound):
+class AtomSHBrace(AtomCompound):
+    def __init__(self,tkns):
+        super().__init__()
+        t = next(tkns)
+        # Enter: DollarParen, Dollarvar
+        # Default to AtomTok: rest (including for shbrace bc just becomes verbatim)
+        while t is not None:
+            if t == Tok.DOLLARVAR:
+                atom = AtomDollar(tkns) # TODO really merge AtomDollar into AtomDollarParens
+            elif t == Tok.DOLLARPAREN:
+                atom = AtomDollarParens(tkns)
+            else:
+                atom = AtomTok(tkns)
+            self.add(atom)
+            t = next(tkns)
     def gentext(self):
         body = ''.join([x.gentext() for x in self]).replace('"','\\"').replace('\1CONSERVEDQUOTE\1','"') # escape any quotes inside
         return 'backend.sh("' + body + '")'
+
 class AtomSHLine(AtomCompound):
+    def __init__(self,tkns):
+        super().__init__()
+        t = next(tkns)
+        # Enter: DollarParen, Dollarvar
+        # Default to AtomTok: rest (including for shbrace bc just becomes verbatim)
+        while t is not None:
+            if t == Tok.DOLLARVAR:
+                atom = AtomDollar(tkns) # TODO really merge AtomDollar into AtomDollarParens
+            elif t == Tok.DOLLARPAREN:
+                atom = AtomDollarParens(tkns)
+            else:
+                atom = AtomTok(tkns)
+            self.add(atom)
+            t = next(tkns)
     def gentext(self):
         body = ''.join([x.gentext() for x in self]).replace('"','\\"').replace('\1CONSERVEDQUOTE\1','"') # escape any quotes inside
         return 'backend.sh("' + body + '",capture_output=False)'
+
 class AtomQuote(AtomCompound):
     def __init__(self,tok):
         super().__init__()
         self.tok = tok #to keep track of ' vs "
-    def parse(self,state):
-        state.
     def gentext(self):
         return self.tok.verbatim + ''.join([x.gentext() for x in self]) + self.tok.verbatim
 
