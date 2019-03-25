@@ -6,12 +6,13 @@
 # parse() is the main function here. It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
 
 
-
 from enum import Enum,unique
 import re
 import os
-import util as u
+from util import *
 from util import die
+import inspect
+
 
 
 # Tok is the lowest level thing around. 
@@ -23,6 +24,7 @@ class Tok(Enum):
     WHITESPACE= re.compile(r'(\s+)')
     COMMA     = re.compile(r',')
     COLON     = re.compile(r':')
+    EXCLAM     = re.compile(r'!')
     FLAG     = re.compile(r'-(\w+)')
     PERIOD     = re.compile(r'\.')
     EQ     = re.compile(r'=')
@@ -41,17 +43,19 @@ class Tok(Enum):
     DOLLARESC = re.compile(r'\$\$')
     DOLLARPAREN = re.compile(r'\$\(')
     DOLLARVAR = re.compile(r'\$(\w+)')
-    IDENTIFIER= re.compile(r'(\w+)')
+    IDENTIFIER= re.compile(r'([a-zA-z_]\w*)')
+    INTEGER    = re.compile(r'(\d+)')
     UNKNOWN   = re.compile(r'(.)')
+    EOL = 0 # should never be matched against since 'UNKOWN' is a catch-all
     def __repr__(self):
         if self.name in ["SH_LINESTART","SH_LBRACE"]:
-            return u.mk_green(self.name)
+            return mk_green(self.name)
         if self.name == "MACROHEAD":
-            return u.mk_purple(self.name)
+            return mk_purple(self.name)
         if self.name == "DOLLARVAR":
-            return u.mk_yellow(self.name)
+            return mk_yellow(self.name)
         if self.name == "WHITESPACE":
-            return u.mk_gray("WS")
+            return mk_gray("WS")
         return self.name
 
 # num of args each macro takes.
@@ -118,6 +122,7 @@ def tokenize(s):
             data = grps[0] if grps else '' # [] is nontruthy
             tkns.append(Token(t,data,match.group()))
             break #break unless you 'continue'd before
+    tkns.append(Token(Tok.EOL,'','')) # end of line indicator
     return tkns
 
 
@@ -126,19 +131,32 @@ def tokenize(s):
 # wow super dumb python bug: never have __init__(self,data=[]) bc by putting '[]' in the argument only ONE copy exists of it for ALL instances of the class. This is very dumb but in python only one instance of each default variable exists and it gets reused.
 
 class TokenIter:
-    def __init__(self,token_list):
+    def __init__(self,token_list,globals):
         self.token_list = token_list
-        self.idx = 0
+        self.idx = 0 # points to the next result of next() or peek()
+        self.globals=globals
     def __next__(self):
-        if self.idx >= len(self.token_list):
-            return None
+        result = self.token_list[self.idx].tok
         self.idx += 1
-        return self.token_list[self.idx-1]
+        #yellow('next() yielded: '+str(result))
+        if result == Tok.EOL:
+            self.back() # rewind on EOL to infinitely yield it
+        return result
+    def back(self):
+        #yellow('backed up')
+        self.idx -= 1
     def peek(self):
-        return self.token_list[self.idx]
+        return self.token_list[self.idx].tok
+    def again(self): # don't advance, just show the last token you showed again
+        return self.token_list[self.idx-1].tok
+    def token_data(self): # gets the Token.data for the last token returned
+        return self.token_list[self.idx-1].data
+    def token_verbatim(self): # gets the Token.verbatim for the last token returned
+        return self.token_list[self.idx-1].verbatim
     def ignore_whitespace(self):
-        while next(self) == tok.WHITESPACE: pass
-        self.idx -= 1 # it's rewind time boys
+        while self.peek() == Tok.WHITESPACE:
+            next(self)
+        gray('skipped WS')
 
 
 # An atom that contains a list of other atoms. e.g. AtomParen
@@ -149,23 +167,24 @@ class AtomCompound:
     def add(self,atom):
         #magenta("adding "+str(atom)+" to "+str(self.__class__))
         self.data.append(atom)
+    # does not recurse. removes top level whitespace of an AtomCompound
+    def rm_whitespace(self):
+        self.data = list(filter(lambda a: not is_tok(a,Tok.WHITESPACE),self.data))
+    # buildin overrides
     def __repr__(self):
         return self.pretty()
     def __str__(self):
         return self.__repr__()
-    def __bool__(self):  # important in macroize(). None == False and any atom == True
-        return True
-    # does not recurse. removes top level whitespace of an AtomCompound
-    def rm_whitespace(self):
-        self.data = list(filter(lambda a: not is_tok(a,Tok.WHITESPACE),self.data))
     def pretty(self,depth=0):
-        colorer = u.mk_cyan
+        colorer = mk_cyan
         name = self.__class__.__name__
         if isinstance(self,AtomMacro):
-            colorer = u.mk_purple
+            colorer = mk_purple
             name = self.name
         contents = colorer('[') + ' '.join([x.pretty(depth+1) for x in self.data]) + colorer(']')
         return '\n' + '\t'*depth + colorer(name) + contents
+    def __bool__(self):  # important in macroize(). None == False and any atom == True
+        return True
     def __iter__(self):
         yield from self.data
     def __getitem__(self, key):
@@ -178,30 +197,94 @@ class AtomCompound:
         return len(self.data)
 
 
+# Shorthand that parses entries into the following
+# compound atoms and returns the resulting atom
+# or returns None if t is not an entry symbol for an espresso-mode
+# atom. Note dollar_parens are sh mode compounds hence not included here
+# Entry symbols: Quote1/2, Paren/Brace/Bracket, Sh_brace
+def try_esmode_compound(t,tkns,parent_exit_toks):
+    atom = None
+    if t == Tok.QUOTE1:
+        atom = AtomQuote1(tkns)
+    elif t == Tok.QUOTE2:
+        atom = AtomQuote2(tkns)
+    elif t == Tok.LPAREN:
+        atom = AtomParen(tkns)
+    elif t == Tok.LBRACE:
+        atom = AtomBrace(tkns)
+    elif t == Tok.LBRACKET:
+        atom = AtomBracket(tkns)
+    elif t == Tok.SH_LBRACE:
+        atom = AtomSHBrace(tkns)
+    elif t == Tok.IDENTIFIER:
+        name = tkns.token_data()
+        # check if macro-style call to a function
+        # TODO change to this: within a macro-style fn call, if you pass in the function foo it assumes you're evaluating it like foo() or foo(...) for 'foo A B' so any of those cases are possible. If you want to pass the function itself in as an argument you must use "&foo"! Imp details:
+            # bar(foo,1,2) where foo is a function. For backcompatibility this is NOT treated as bar(foo(),1,2)
+            # 'head ls' using the functions head(list) and ls(). this translates to head(ls()).
+            # 'head(ls)' (will throw runtime error ofc) - translates to head(ls)
+            # 'head(cat "test.txt")' - translates to head(cat("test.txt"))
+            # so basically:
+                # a zero-arg function will not be autoevaluated unless it's part of an outer macro expression ie treated as an ArgAtom
+                # if it is an argatom you need to call it &foo instead of foo to suppress the evaluation. Same applies to multiarg functions
+                # principle -- unfortunately deviates from python normality (tho still backcompatible), but passing a function object in is WAY less common than passing in the result of evaluating the function. In particular in the case of chaining macros.
+        if tkns.peek() == Tok.EXCLAM and (name in tkns.globals) and callable(tkns.globals[name]):
+            next(tkns) # consume that Tok.EXCLAM
+            fn = tkns.globals[name]
+            # use fn.parse_hook(tkns) if the function exists.
+            # parse_hook() should return an AtomMacro
+            # TODO change this around so you can basically either fully control the AtomMacro
+            # from the parse_hook or you can just for example make one particular argument 
+            # parsed in your own way -- you're given the option somehow.
+            # e.g. could either extend AtomMacro or could extend AtomArg perhaps
+            if 'parse_hook' in dir(fn):
+                return fn.parse_hook(tkns)
+            params = inspect.signature(fn).parameters.values()
+            # required params are any without defaults
+            # TODO this process doesn't handle KEYWORD_ONLY and other kinds
+            # of args bc I don't know how functions can be used completely and need
+            # to research it more (e.g. theres some true kwargs stuff etc)
+            required_argc = len(list(filter(lambda x: x.default==inspect._empty,params)))
+            blue(f"required_argc:{required_argc}")
+            # first all args without defaults must be provided
+            # TODO then after than kwargs can be provided
+            arg_atoms = []
+            for i in range(required_argc):
+                tkns.ignore_whitespace() # allow arbitrary whitespace between args
+                arg_atom = AtomArg(tkns,parent_exit_toks=parent_exit_toks)
+                arg_atoms.append(arg_atom)
+            atom = AtomMacro(name,arg_atoms)
+    else:
+        atom = None
+    return atom
+
+def try_shmode_compound(t,tkns):
+    if t == Tok.DOLLARVAR:
+        atom = AtomDollar(tkns) # TODO really merge AtomDollar into AtomDollarParen
+    elif t == Tok.DOLLARPAREN:
+        atom = AtomDollarParen(tkns)
+    else:
+        atom = None
+    return atom
+
+
 #The parent atom for a line of code
 class AtomMaster(AtomCompound):
     def __init__(self,tkns):
         super().__init__()
         t = next(tkns)
         if t == Tok.SH_LINESTART:
-            AtomSHLine(tkns)
-            assert(next(tkns) is None) # code in a more kind way. Make a util.asrt() or something
+            atom = AtomSHLine(tkns)
+            self.add(atom)
+            return
         # Enter: Quote1/2, Paren/Brace/Bracket, Sh_brace
         # Default to AtomTok: DollarParen, AtomDollar, etc
-        while t is not None:
-            if t == Tok.QUOTE1:
-                atom = AtomQuote1(tkns)
-            elif t == Tok.QUOTE2:
-                atom = AtomQuote2(tkns)
-            elif t == Tok.LPAREN:
-                atom = AtomParen(tkns)
-            elif t == Tok.LBRACE:
-                atom = AtomBrace(tkns)
-            elif t == Tok.LBRACKET:
-                atom = AtomBracket(tkns)
-            elif t == Tok.SH_LBRACE:
-                atom = AtomSHBrace(tkns)
-            else: ## DollarParen included! and AtomDollar (for now at least)
+        while t is not Tok.EOL:
+            #cyan("Master step")
+            # compound
+            atom = try_esmode_compound(t,tkns,parent_exit_toks=[Tok.EOL])
+            if not atom:
+                # non-compound
                 atom = AtomTok(tkns)
             self.add(atom)
             t = next(tkns)
@@ -213,68 +296,128 @@ class AtomSHBrace(AtomCompound):
     def __init__(self,tkns):
         super().__init__()
         t = next(tkns)
+        depth = 1
         # Enter: DollarParen, Dollarvar
+        # Count: '{' and '}'
+        # Exit: '}' and zero depth
         # Default to AtomTok: rest (including for shbrace bc just becomes verbatim)
-        while t is not None:
-            if t == Tok.DOLLARVAR:
-                atom = AtomDollar(tkns) # TODO really merge AtomDollar into AtomDollarParens
-            elif t == Tok.DOLLARPAREN:
-                atom = AtomDollarParens(tkns)
-            else:
-                atom = AtomTok(tkns)
+        while t is not Tok.EOL:
+            # compound
+            atom = try_shmode_compound(t,tkns)
+            if not atom:
+                # brace-counting
+                if t == Tok.LBRACE:
+                    depth += 1
+                    atom = AtomTok(tkns)
+                elif t == Tok.RBRACE:
+                    depth -= 1
+                    if depth == 0: #EXIT
+                        return
+                    else:
+                        atom = AtomTok(tkns)
+                # non-compound
+                else:
+                    atom = AtomTok(tkns)
             self.add(atom)
             t = next(tkns)
     def gentext(self):
         body = ''.join([x.gentext() for x in self]).replace('"','\\"').replace('\1CONSERVEDQUOTE\1','"') # escape any quotes inside
         return 'backend.sh("' + body + '")'
 
-class AtomSHLine(AtomCompound):
-    def __init__(self,tkns):
+
+
+# superclass for all the simple compound atoms
+# with basic exit logic etc
+class AtomCompoundSimple(AtomCompound):
+    def __init__(self,tkns,mode,exit_toks):
         super().__init__()
         t = next(tkns)
-        # Enter: DollarParen, Dollarvar
-        # Default to AtomTok: rest (including for shbrace bc just becomes verbatim)
-        while t is not None:
-            if t == Tok.DOLLARVAR:
-                atom = AtomDollar(tkns) # TODO really merge AtomDollar into AtomDollarParens
-            elif t == Tok.DOLLARPAREN:
-                atom = AtomDollarParens(tkns)
+        while t != Tok.EOL:
+            # exit
+            if t in exit_toks:
+                return
+            # compound
+            atom = None
+            if mode == 'es':
+                atom = try_esmode_compound(t,tkns,parent_exit_toks=exit_toks)
+            elif mode == 'sh':
+                atom = try_shmode_compound(t,tkns)
+            elif mode == 'quote':
+                atom = None
             else:
+                die('unrecognized mode for AtomCompoundSimple:'+str(mode))
+            if not atom:
+                # non-compound
                 atom = AtomTok(tkns)
             self.add(atom)
             t = next(tkns)
+        if Tok.EOL not in exit_toks:
+            raise Exception(f'EOL with unclosed AtomCompoundSimple: {type(self)}. Closer should be: {exit_toks}')
+
+class AtomArg(AtomCompoundSimple):
+    def __init__(self,tkns,parent_exit_toks):
+        super().__init__(tkns,mode='es',exit_toks=[Tok.WHITESPACE]+parent_exit_toks)
+        blue(tkns.again())
+        if tkns.again() in parent_exit_toks and tkns.again() != Tok.EOL: # EOL not included bc it autorewinds
+            tkns.back()
+    def gentext(self):
+        return ''.join([x.gentext() for x in self])
+
+class AtomMacro(AtomCompound):
+    def __init__(self,fn_name,arg_atoms):
+        super().__init__()
+        self.data = arg_atoms
+        self.name = fn_name
+    def gentext(self):
+        return self.name+"(" + ','.join([x.gentext() for x in self]) + ")"
+
+class AtomSHLine(AtomCompoundSimple):
+    def __init__(self,tkns):
+        super().__init__(tkns,mode='sh',exit_toks=[Tok.EOL])
     def gentext(self):
         body = ''.join([x.gentext() for x in self]).replace('"','\\"').replace('\1CONSERVEDQUOTE\1','"') # escape any quotes inside
         return 'backend.sh("' + body + '",capture_output=False)'
 
-class AtomQuote(AtomCompound):
-    def __init__(self,tok):
-        super().__init__()
-        self.tok = tok #to keep track of ' vs "
+class AtomQuote1(AtomCompoundSimple):
+    def __init__(self,tkns):
+        super().__init__(tkns,mode='quote',exit_toks=[Tok.QUOTE1])
     def gentext(self):
-        return self.tok.verbatim + ''.join([x.gentext() for x in self]) + self.tok.verbatim
+        return "\'" + ''.join([x.gentext() for x in self]) + "\'"
 
-class AtomParens(AtomCompound):
+class AtomQuote2(AtomCompoundSimple):
+    def __init__(self,tkns):
+        super().__init__(tkns,mode='quote',exit_toks=[Tok.QUOTE2])
+    def gentext(self):
+        return "\"" + ''.join([x.gentext() for x in self]) + "\""
+
+class AtomParen(AtomCompoundSimple):
+    def __init__(self,tkns):
+        #purple('entering Paren')
+        super().__init__(tkns,mode='es',exit_toks=[Tok.RPAREN])
+        #purple('exiting Paren')
     def gentext(self):
         return '('+''.join([x.gentext() for x in self]) + ')'
 
-class AtomDollarParens(AtomCompound):
+class AtomBracket(AtomCompoundSimple):
+    def __init__(self,tkns):
+        super().__init__(tkns,mode='es',exit_toks=[Tok.RBRACKET])
+    def gentext(self):
+        return '['+''.join([x.gentext() for x in self]) + ']'
+
+class AtomBrace(AtomCompoundSimple):
+    def __init__(self,tkns):
+        super().__init__(tkns,mode='es',exit_toks=[Tok.RBRACE])
+    def gentext(self):
+        return '{'+''.join([x.gentext() for x in self]) + '}'
+
+class AtomDollarParen(AtomCompoundSimple):
+    def __init__(self,tkns):
+        super().__init__(tkns,mode='es',exit_toks=[Tok.RPAREN])
     def gentext(self):
         py_expr =  ''.join([x.gentext() for x in self])
         return "\"+str({})+\"".format(py_expr).replace('"','\1CONSERVEDQUOTE\1')
 
 
-
-# A macro like %cat
-class AtomMacro(AtomCompound):
-    def __init__(self,name,argc):
-        super().__init__()
-        self.name=name
-        self.argc=argc
-    def __repr__(self):
-        return super().__repr__() + u.mk_red('(name='+self.name+', argc='+str(self.argc) + ')')
-    def gentext(self):
-        return build_call(self.name,self.data)
 
 
 # assert that the object 'child' is and instance of the class 'parent'
@@ -292,10 +435,13 @@ def assertInst(child,parent):
 
 # any token that isn't converted to some other Atom
 class AtomTok: # not a subclass bc we don't want it to inherit add()
-    def __init__(self,token):
-        self.tok = token.tok
-        self.data = token.data
-        self.verbatim = token.verbatim
+    def __init__(self,tkns):
+        self.tok = tkns.again() # reshow last tok
+        self.data = tkns.token_data()
+        self.verbatim = tkns.token_verbatim()
+    def gentext(self):
+        return self.verbatim
+    # builtin overrides
     def __repr__(self):
         return self.pretty()
     def __str__(self):
@@ -304,109 +450,112 @@ class AtomTok: # not a subclass bc we don't want it to inherit add()
         return True
     def pretty(self,depth=0):
         if self.tok == Tok.MACROHEAD:
-            return u.mk_purple(self.data)
+            return mk_purple(self.data)
         if self.tok == Tok.DOLLARVAR:
-            return u.mk_yellow(self.data)
+            return mk_yellow(self.data)
         if self.tok == Tok.WHITESPACE:
-            return u.mk_gray('WS')
+            return mk_gray('WS')
         return self.tok.name
-    def gentext(self):
-        return self.verbatim
 
 
 # dollar variables, like for sh{} interpolation with $foo
 class AtomDollar(AtomTok):
-    def __init__(self,tok,mode):
-        super().__init__(tok)
-        self.mode=mode
+    def __init__(self,tkns):
+        super().__init__(tkns)
     def gentext(self): #for dollar this is only called when NOT part of a special macro construct like idx_casts (int $1, int $3) etc
-        if self.mode == 'global': #TODO make it actually use this
-            return 'os.environ["'+self.data+'"]'
-        elif self.mode == 'interp':
-            return "\"+str({})+\"".format(self.data).replace('"','\1CONSERVEDQUOTE\1')
-        else:
-            die("unrecognized mode:{}".format(self.mode))
+        #if self.mode == 'global': #TODO make it actually use this
+        #    return 'os.environ["'+self.data+'"]'
+        #elif self.mode == 'interp':
+        return "\"+str({})+\"".format(self.data).replace('"','\1CONSERVEDQUOTE\1')
+        #else:
+        #    die("unrecognized mode:{}".format(self.mode))
 
 # turn a token list into a MASTER atom containing all other atoms
-def atomize(tokenlist):
-    curr_quote = None #None, Tok.QUOTE1 or Tok.QUOTE2
-    parents = [('master',None)] # the None can hold extra data eg brace depth for SH
-    atoms = [AtomMaster()]
-    def parent(): return parents[-1][0]
-    def data(): return parents[-1][1]
-    def parent_atom(): return atoms[-1]
-    for token in tokenlist:
-        t = token.tok #the Tok
-        if t == Tok.DOLLARVAR and parent() in ['sh_brace','sh_line']:
-            as_tok = AtomDollar(token,'interp')
-        elif t == Tok.DOLLARVAR and parent() not in ['sh_brace','sh_line']:
-            as_tok = AtomDollar(token,'global')
-        else:
-            as_tok = AtomTok(token)
-        # IF IN QUOTE ATOM, then everything is a plain token other than the exit quote token
-        if parent() == 'quote': #highest precedence -- special rules when inside quotes
-            # EXIT QUOTE ATOM?
-            if t == data()['curr_quote']: #close quotation
-                assertInst(atoms[-1],AtomQuote)
-                parents.pop()
-                atoms[-2].add(atoms.pop())  #pop last atom onto end of second to last atom's data
-            # STAY IN QUOTE ATOM
-            else:
-                atoms[-1].add(as_tok)
-        # ENTER QUOTE ATOM?
-        elif t == Tok.QUOTE1 or t == Tok.QUOTE2:
-            parents.append(('quote',{'curr_quote':t}))
-            atoms.append(AtomQuote(token))    #start a new quote atom
-        # IF IN SH, then we don't care about anything but { } counting and DollarParens
-        # everything else is flattened (so no worries about needing to recurse or keep track
-        # of having a sh{} somewhere earlier on the stack)
-        elif parent() in ['sh_brace','sh_line']:
-            if parent() == 'sh_brace':
-                if t == Tok.SH_LBRACE: die("SH_LBRACE inside of an sh{}")
-                elif t == Tok.LBRACE:
-                    data()['brace_depth'] += 1
-                    continue #these continues are important
-                elif t == Tok.RBRACE:
-                    data()['brace_depth'] -= 1
-                    # LEAVE SH
-                    if data()['brace_depth'] == 0:
-                        assertInst(atoms[-1],AtomSH)
-                        parents.pop()
-                        atoms[-2].add(atoms.pop())
-                    continue #these continues are important
-            # ENTER DOLLARPARENS? (only possible from within SH)
-            if t == Tok.DOLLARPAREN:
-                parents.append('dollarparens')
-                atoms.append(AtomDollarParens())
-            #STAY IN SH
-            else:
-                atoms[-1].add(as_tok)
+def atomize(tokenlist,globals):
+    tkns = TokenIter(tokenlist,globals)
+    atoms = AtomMaster(tkns)
+    return atoms
 
-        ###### REST IS FOR OUTSIDE SH OUTSIDE QUOTE:
-        # ENTER SH?
-        elif t == Tok.SH_LBRACE:
-            parents.append(('sh_brace',{'brace_depth':1}))
-            atoms.append(AtomSH())
-        elif t == Tok.SH_LINESTART:
-            parents.append(('sh_line',None))
-            atoms.append(AtomSHLine())
-        # OPEN PARENS
-        elif t == Tok.LPAREN:
-            parents.append(('parens',None))
-            atoms.append(AtomParens())
-        # CLOSE PARENS
-        elif t == Tok.RPAREN:
-            assertInst(atoms[-1],[AtomParens,AtomDollarParens])
-            parents.pop()
-            atoms[-2].add(atoms.pop())
-        else:
-            atoms[-1].add(as_tok)
-    if len(atoms) == 2 and parent() == 'sh_line':
-        assertInst(atoms[-1],AtomSHLine)
-        parents.pop()
-        atoms[-2].add(atoms.pop())
-    if len(atoms) != 1: die("There should only be the MASTER left in the 'atoms' list! Actual contents:"+str(atoms))
-    return atoms.pop()
+
+
+#    curr_quote = None #None, Tok.QUOTE1 or Tok.QUOTE2
+#    parents = [('master',None)] # the None can hold extra data eg brace depth for SH
+#    atoms = [AtomMaster()]
+#    def parent(): return parents[-1][0]
+#    def data(): return parents[-1][1]
+#    def parent_atom(): return atoms[-1]
+#    for token in tokenlist:
+#        t = token.tok #the Tok
+#        if t == Tok.DOLLARVAR and parent() in ['sh_brace','sh_line']:
+#            as_tok = AtomDollar(token,'interp')
+#        elif t == Tok.DOLLARVAR and parent() not in ['sh_brace','sh_line']:
+#            as_tok = AtomDollar(token,'global')
+#        else:
+#            as_tok = AtomTok(token)
+#        # IF IN QUOTE ATOM, then everything is a plain token other than the exit quote token
+#        if parent() == 'quote': #highest precedence -- special rules when inside quotes
+#            # EXIT QUOTE ATOM?
+#            if t == data()['curr_quote']: #close quotation
+#                assertInst(atoms[-1],AtomQuote)
+#                parents.pop()
+#                atoms[-2].add(atoms.pop())  #pop last atom onto end of second to last atom's data
+#            # STAY IN QUOTE ATOM
+#            else:
+#                atoms[-1].add(as_tok)
+#        # ENTER QUOTE ATOM?
+#        elif t == Tok.QUOTE1 or t == Tok.QUOTE2:
+#            parents.append(('quote',{'curr_quote':t}))
+#            atoms.append(AtomQuote(token))    #start a new quote atom
+#        # IF IN SH, then we don't care about anything but { } counting and DollarParens
+#        # everything else is flattened (so no worries about needing to recurse or keep track
+#        # of having a sh{} somewhere earlier on the stack)
+#        elif parent() in ['sh_brace','sh_line']:
+#            if parent() == 'sh_brace':
+#                if t == Tok.SH_LBRACE: die("SH_LBRACE inside of an sh{}")
+#                elif t == Tok.LBRACE:
+#                    data()['brace_depth'] += 1
+#                    continue #these continues are important
+#                elif t == Tok.RBRACE:
+#                    data()['brace_depth'] -= 1
+#                    # LEAVE SH
+#                    if data()['brace_depth'] == 0:
+#                        assertInst(atoms[-1],AtomSH)
+#                        parents.pop()
+#                        atoms[-2].add(atoms.pop())
+#                    continue #these continues are important
+#            # ENTER DOLLARPARENS? (only possible from within SH)
+#            if t == Tok.DOLLARPAREN:
+#                parents.append('dollarparens')
+#                atoms.append(AtomDollarParens())
+#            #STAY IN SH
+#            else:
+#                atoms[-1].add(as_tok)
+#
+#        ###### REST IS FOR OUTSIDE SH OUTSIDE QUOTE:
+#        # ENTER SH?
+#        elif t == Tok.SH_LBRACE:
+#            parents.append(('sh_brace',{'brace_depth':1}))
+#            atoms.append(AtomSH())
+#        elif t == Tok.SH_LINESTART:
+#            parents.append(('sh_line',None))
+#            atoms.append(AtomSHLine())
+#        # OPEN PARENS
+#        elif t == Tok.LPAREN:
+#            parents.append(('parens',None))
+#            atoms.append(AtomParens())
+#        # CLOSE PARENS
+#        elif t == Tok.RPAREN:
+#            assertInst(atoms[-1],[AtomParens,AtomDollarParens])
+#            parents.pop()
+#            atoms[-2].add(atoms.pop())
+#        else:
+#            atoms[-1].add(as_tok)
+#    if len(atoms) == 2 and parent() == 'sh_line':
+#        assertInst(atoms[-1],AtomSHLine)
+#        parents.pop()
+#        atoms[-2].add(atoms.pop())
+#    if len(atoms) != 1: die("There should only be the MASTER left in the 'atoms' list! Actual contents:"+str(atoms))
+#    return atoms.pop()
 
 
 
@@ -508,27 +657,27 @@ def build_special_args(fname,args):
 
 # the main function that runs the parser
 # It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
-def parse(line,debug=False):
+def parse(line,globals,debug=False):
     if debug:
-        u.red("========================="*3)
-        u.red("=Input=")
+        red("========================="*3)
+        red("=Input=")
         print(line)
     tkns = tokenize(line)
     #tkns = sanitize_tkns(tkns)
     if debug:
-        u.red("=Tokens=")
+        red("=Tokens=")
         print(tkns)
-    a = atomize(tkns)
+    a = atomize(tkns,globals)
     if debug:
-        u.red("=Atoms=")
+        red("=Atoms=")
         print(a)
-    macroize(a)
-    if debug:
-        u.red("=Atoms Post Macroization=")
-        print(a)
+    #macroize(a)
+    #if debug:
+    #    red("=Atoms Post Macroization=")
+    #    print(a)
     out = a.gentext()
     if debug:
-        u.blue(out)
+        blue(out)
     return out
 
 

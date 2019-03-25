@@ -247,12 +247,12 @@ class Repl:
                 line = input(mk_green(' '*(self.state.banner_uncoloredlen-1)+'|'))
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
                 lines.append(line)
-            new_code += [codegen.parse(line,debug=self.state.debug) for line in lines]
+            new_code += [codegen.parse(line,self.state.globs,debug=self.state.debug) for line in lines]
         else:
             if self.state.mode == 'speedy':
                 line = 'sh '+line.strip()
             # SPEEDY/NORMAL MODE
-            new_code.append(codegen.parse(line,debug=self.state.debug))
+            new_code.append(codegen.parse(line,self.state.globs,debug=self.state.debug))
             #to_undo = 1
         return new_code
 
