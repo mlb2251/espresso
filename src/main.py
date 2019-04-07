@@ -7,7 +7,7 @@ import sys
 import os
 from copy import deepcopy
 
-import codegen2 as codegen
+import codegen
 import util as u
 import repl
 

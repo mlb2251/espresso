@@ -5,7 +5,7 @@ from importlib import reload
 import traceback as tb
 import ast
 
-import codegen2 as codegen
+import codegen
 import util as u
 
 ###############################
