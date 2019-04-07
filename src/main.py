@@ -7,9 +7,8 @@ import sys
 import os
 from copy import deepcopy
 
-import codegen
+import codegen2 as codegen
 import util as u
-from util import *
 import repl
 
 import readline
@@ -77,7 +76,7 @@ def handle_communication(state):
             state = ReplState(deepcopy(init_state))
         if msg == 'drop out of repl to reload from main':
             while u.reload_modules(sys.modules,verbose=state.verbose_exceptions):
-                line = input(mk_green("looping reload from main... \nhit enter to retry.\n only metacommand is '!v' to print unformatted exception\n>>> "))
+                line = input(u.mk_g("looping reload from main... \nhit enter to retry.\n only metacommand is '!v' to print unformatted exception\n>>> "))
                 if line.strip() == '!v':
                     state.verbose_exceptions = not state.verbose_exceptions
     return state
@@ -89,7 +88,7 @@ def handle_communication(state):
 # (you could pass args by inserting them into the prelude somehow)
 def do_compile():
     infile = sys.argv[1]
-    outfile = "a_out.py"
+    #outfile = "a_out.py"
 
     code = prelude
 

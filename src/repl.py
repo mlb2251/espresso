@@ -5,9 +5,8 @@ from importlib import reload
 import traceback as tb
 import ast
 
-import codegen
+import codegen2 as codegen
 import util as u
-from util import *
 
 ###############################
 ###############################
@@ -162,12 +161,12 @@ class Repl:
             else:
                 self.state.mode = 'normal'
             self.update_banner()
-            print(mk_gray("metacommand registered"))
+            u.gray("metacommand registered")
             return True
         # handle metacommands
         if line[0] == '!':
             if line.strip() == '!print':
-                print(mk_yellow('\n'.join(self.state.code)))
+                u.y('\n'.join(self.state.code))
             if line.strip() == '!debug':
                 self.state.debug = not self.state.debug
             if line.strip() == '!verbose_exc':
@@ -180,24 +179,24 @@ class Repl:
             #if line.strip() == '!which':
                 #print(self.state.tmpfile)
             if line.strip() == '!help':
-                blue('Currently implemented macros listing:')
-                print(mk_purple('\n'.join(codegen.macro_argc.keys())))
-            print(mk_gray("metacommand registered"))
+                u.b('Currently implemented macros listing:')
+                u.p('\n'.join(codegen.macro_argc.keys()))
+            u.gray("metacommand registered")
             return True
         return False
 
     # the banner is like the '>>> ' in the python repl for example
     def update_banner(self):
         self.state.banner_cwd = os.getcwd()
-        prettycwd = pretty_path(self.state.banner_cwd)
+        prettycwd = u.pretty_path(self.state.banner_cwd)
         if self.state.mode == 'normal':
             banner_txt = "es:"+prettycwd+" > "
             self.state.banner_uncoloredlen = len(banner_txt)
-            self.state.banner = mk_green(banner_txt)
+            self.state.banner = u.mk_g(banner_txt)
         if self.state.mode == 'speedy':
             banner_txt = "es:"+prettycwd+" $ "
             self.state.banner_uncoloredlen = len(banner_txt)
-            self.state.banner = mk_yellow(banner_txt)
+            self.state.banner = u.mk_y(banner_txt)
 
     # prompts user for input and returns the line they enter.
     def get_input(self):
@@ -216,10 +215,10 @@ class Repl:
                 if not failed_mods: # empty list is untruthy
                     break
                 if 'repl' in failed_mods:
-                    blue('error in repl.py, breaking to main.py to recompile') # fuck ya, clever boiiii
+                    u.blue('error in repl.py, breaking to main.py to recompile') # fuck ya, clever boiiii
                     self.state.communicate += ['drop out of repl to reload from main']
                     return
-                line = input(mk_green("[Reload with ENTER]"))
+                line = input(u.mk_g("[Reload with ENTER]"))
                 if self.try_metacommands(line): #eg '!verbose_exc'
                     return
         except KeyboardInterrupt: # ctrl-c lets you swap modes quickly TODO instead have this erase the current like like in the normal python repl
@@ -241,16 +240,16 @@ class Repl:
         # MULTILINE STATEMENTS
         if line.strip()[-1] == ':': # start of an indent block
             set_tabcomplete(False)
-            if self.state.mode == 'speedy': print(mk_gray('dropping into normal mode for multiline'))
+            if self.state.mode == 'speedy': u.gray('dropping into normal mode for multiline')
             lines = [line]
             while True:
-                line = input(mk_green(' '*(self.state.banner_uncoloredlen-1)+'|'))
+                line = input(u.mk_g(' '*(self.state.banner_uncoloredlen-1)+'|'))
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
                 lines.append(line)
             new_code += [codegen.parse(line,self.state.globs,debug=self.state.debug) for line in lines]
         else:
             if self.state.mode == 'speedy':
-                line = 'sh '+line.strip()
+                line = ':'+line.strip()
             # SPEEDY/NORMAL MODE
             new_code.append(codegen.parse(line,self.state.globs,debug=self.state.debug))
             #to_undo = 1
@@ -262,6 +261,7 @@ class Repl:
         #with open(self.tmpfile,'w') as f:
             #f.write('\n'.join(self.code))
         codestring = '\n'.join(new_code)
+        u.b(codestring)
         try:
             # Note that this can only take one Interactive line at a time (which may
             # actually be a multiline for loop etc).

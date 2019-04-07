@@ -5,16 +5,19 @@
 # class AtomCompound, etc: These Atoms are AST components. Each has a .gentext() method that generates the actual final text that the atom should become in the compiled code
 # parse() is the main function here. It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
 
+
+## TODO next: make SInitial more pretty. I dont htink overloader is the way to go, we shd start in SInit then trans to Snormal not just wrap Snormal.
+
+
 ## assertion based coding. After all, we're going for slow-but-effective. And assertions can be commented in the very final build. This is the python philosophy - slow and effective, but still fast enough
 
-#### STILL A PROBLEM: right now when we enter an SNormal wiht '(' the verbatim '(' never actually gets printed.
 
 
 from enum import Enum,unique
 import re
 import os
-from util import *
-from util import die
+from util import die,warn,Debug
+import util as u
 import inspect
 
 # Tok is the lowest level thing around. 
@@ -52,13 +55,13 @@ class TokTyp(Enum):
     EOL = 1 # should never be matched against since 'UNKOWN' is a catch-all
     def __repr__(self):
         if self.name in ["SH_LINESTART","SH_LBRACE"]:
-            return mk_green(self.name)
+            return u.mk_g(self.name)
         if self.name == "MACROHEAD":
-            return mk_purple(self.name)
+            return u.mk_p(self.name)
         if self.name == "DOLLARVAR":
-            return mk_yellow(self.name)
+            return u.mk_y(self.name)
         if self.name == "WHITESPACE":
-            return mk_gray("WS")
+            return u.mk_gray("WS")
         return self.name
 
 def closer_of_opener(opener_tok):
@@ -89,7 +92,10 @@ class Tok:
         self.data=data          # the contents of the capture group of the Tok's regex, if any.
         self.verbatim=verbatim  # e.g. 'foo'. The verbatim text that the regex matched on
     def __repr__(self):
-        return self.tok.__repr__()
+        out = self.typ.__repr__()
+        if self.data != '':
+            out += '('+ u.mk_y(self.data) + ')'
+        return out
 
 # a fancy iterator globally used for keeping track of the current state of processing the token stream
 class TokStream:
@@ -100,7 +106,7 @@ class TokStream:
     # returns the number of remaining tokens (including whatever is currently pointed to)
     ##CRFL!
     def __len__(self):
-        return len(self.tkns)-self.idx
+        return max(0,len(self.tkns)-self.idx)
     # a request beyond the end will return None
     ##CRFL!
     def __getitem__(self,rel_idx):
@@ -117,13 +123,14 @@ class TokStream:
         return res
     def step(self,ntoks=1):
         self.idx += ntoks
+        u.gray("'"+self[0].verbatim+"'" if self[0] is not None else 'None')
     def skip_whitespace(self):
         if self[0].typ == TokTyp.WHITESPACE:
             self.step() #note you can never have mult whitespaces in a row since they consolidate by \s+
 
     ## left commented for now in hopes that we'll have nice clean code that will never need to do this
-    #def rewind(self,ntoks=1):
-    #    self.idx -= ntoks
+    def rewind(self,ntoks=1):
+        self.idx -= ntoks
 
 
     ## TokStream: LEFT AS WIP. unclear what best design is for these methods. best to make form fit the function by designing States first
@@ -176,12 +183,16 @@ POP = -1
 # post(text): this will be called with the final accumulated result of the transition() loop, and should do any necessary post processing on it, for example wrapping it in '(' ')' characters for a parenthetical state. post() should also have assert() calls to verify that tstream is properly aligned.
 
 
+
 class State:
-    def __init__(self,parent,tstream=None, globals=None):
+    def __init__(self,parent,tstream=None, globals=None, debug=None):
         self.parent = parent
         self.halt = False # halt is effectively returning a value AND popping
         self._tstream = parent._tstream if (tstream is None) else tstream
         self._globals = parent._globals if (globals is None) else globals
+        self.debug_name = "[debug_name not set: {}]".format(self.__class__)
+        self.debug_depth = parent.debug_depth+1 if (parent is not None) else 0
+        self.d = parent.d if debug is None else debug
         #self.popped = False
         #self.nostep = False
         #self.tmp = None # just a useful temp var for subclasses that dont want to go to the work of overriding init
@@ -189,13 +200,25 @@ class State:
     def run(self):
         text = ''
         self.pre()
+        self.d.r("starting: "+self.debug_name)
         while True:
             if self.tok() is None:
                 assertmsg(len(self._tstream)==0,'if tstream[0] is None that must mean we are out of tokens')
+                self.d.print("EOL autopop from run()")
                 break # autopop on EOL
 
+            tmp_str = "{}.transition('{}')".format(self.debug_name,self.tok().verbatim)
+            self.d.y(tmp_str)
             res = self.transition(self.tok())
             assertmsg(res is not None, 'for clarity we dont allow transition() to return None. It must return '' or NONE (the global constant) for no extension)')
+            tmp_res = res
+            if res == VERBATIM:
+                tmp_res = self.tok().verbatim
+            elif res == NONE:
+                tmp_res = '[none]'
+            elif res == POP:
+                tmp_res = 'POP'
+            self.d.y("{} -> '{}'".format(tmp_str,tmp_res))
 
             if isinstance(res,str): # extend text
                 text += res
@@ -210,7 +233,10 @@ class State:
             if self.halt: # no step on pop
                 break
             self.step()
-        return self.post(text)
+        self.d.p("before postproc: "+text)
+        out = self.post(text)
+        self.d.b("{}:{}".format(self.debug_name,out))
+        return out
     def pre(self): # default implementation
         pass
     def post(self,text): # default implementation
@@ -218,7 +244,7 @@ class State:
     def run_same(self,state):
         return state.run() # will always return -1
     def run_next(self,state):
-        tstream.step()
+        self._tstream.step()
         return state.run() # will always return -1
     def pop(self,value):
         self.popped = True
@@ -226,6 +252,16 @@ class State:
     def transition(self,t):
        raise NotImplementedError # subclasses must override
 
+    def assertpre(self,cond,msg=None):
+       m = "pre-assert failed for {}".format(self.debug_name)
+       if msg is not None:
+           m += ' : ' + msg
+       assertmsg(cond,m)
+    def assertpost(self,cond,msg=None):
+       m = "post-assert failed for {}".format(self.debug_name)
+       if msg is not None:
+           m += ' : ' + msg
+       assertmsg(cond,m)
     # functions for managing _tstream and _globals
     # tok()
     # tok(1)
@@ -236,6 +272,8 @@ class State:
         return self._tstream[idx]
     def step(self):
         return self._tstream.step()
+    def rewind(self):
+        return self._tstream.rewind()
     # if fname is not in globals or is not callable, return False
     def check_callable(self,fname):
         return callable(self._globals.get(fname))
@@ -256,14 +294,15 @@ class SNormal(State):
         super().__init__(parent)
         self.opener = opener
         self.closer = closer_of_opener(opener) # closer is a TokTyp
+        self.debug_name = "SNormal[{}]".format(opener.verbatim)
     def pre(self):
-        ## todo - for SNormal and all others - pre() should do some assertions regarding the starting point we're at
-        pass
+        if self.opener.typ != TokTyp.SOL:
+            self.assertpre(self.tok(-1)==self.opener)
     def transition(self,t):
         ## transition(t) always ASSUMES that tstream[0] == t. Feeding an arbitrary token into transition is undefined behavior. Though it should only have an impact on certain peeks
         assertmsg(self.tok() is t, "transition(t) assumes that tstream[0] == t and this has been violated")
 
-        if t.typ == self.closer:
+        if t.typ == self.closer.typ:
             return POP
         elif t.typ == TokTyp.SH_LBRACE:
             return self.run_next(SShmode(self))
@@ -271,12 +310,14 @@ class SNormal(State):
             return self.run_next(SNormal(self,t))
         elif t.typ in [TokTyp.QUOTE1, TokTyp.QUOTE2]:
             return self.run_next(SQuote(self,t))
-        elif t.typ == TokTyp.ID and self.check_callable(t.data) and self.tok(1).typ == TokTyp.WHITESPACE:
-            tstream.step() # now tstream[0] pointing to the whitespace
-            tstream.step() # now tstream[0] pointing one beyond whitespace (which can no longer be a whitespace since WS = \s+)
+        elif t.typ == TokTyp.ID and self.check_callable(t.data) and (self.tok(1) is None or self.tok(1).typ == TokTyp.WHITESPACE):
+            self.step() # now tstream[0] pointing to the whitespace
+            self.step() # now tstream[0] pointing one beyond whitespace (which can no longer be a whitespace since WS = \s+)
             return self.run_same(SSpacecall(self,t.data))
         return VERBATIM
     def post(self,text):
+        if self.opener.typ != TokTyp.SOL:
+            self.assertpost(self.tok().typ == self.closer.typ)
         return self.opener.verbatim + text + self.closer.verbatim
 
 
@@ -287,8 +328,9 @@ class SQuote(State):
         super().__init__(parent)
         self.opener = opener
         self.closer = opener # for quotes a closer is it's own opener
+        self.debug_name = "SQuote[{}]".format(opener.verbatim)
     def transition(self,t):
-        if t.typ == self.closer:
+        if t.typ == self.closer.typ:
             return POP
         return VERBATIM
     def post(self,text):
@@ -301,8 +343,9 @@ class SShquote(State):
         super().__init__(parent)
         self.opener = opener
         self.closer = opener # for quotes a closer is it's own opener
+        self.debug_name = "SShquote[{}]".format(opener.verbatim)
     def transition(self,t):
-        if t.typ == self.closer:
+        if t.typ == self.closer.typ:
             return POP
         return VERBATIM
     def post(self,text):
@@ -311,14 +354,16 @@ class SShquote(State):
 # sh{X
 #    ^
 class SShmode(State):
-    def __init__(self,parent):
+    def __init__(self,parent,capture_output=True):
         super().__init__(parent)
         self.brace_depth = 1
+        self.debug_name = "SShmode"
+        self.capture_output = capture_output
     def transition(self,t):
         if t.typ == TokTyp.LBRACE:
             self.brace_depth += 1
             return VERBATIM
-        elif t.typ == TokTyp.LBRACE:
+        elif t.typ == TokTyp.RBRACE:
             self.brace_depth -= 1
             if self.brace_depth == 0:
                 return POP
@@ -329,62 +374,78 @@ class SShmode(State):
             return self.run_next(SNormal(self,t))
         return VERBATIM
     def post(self,text):
-        return 'backend.sh("' + text + '")'
+        return 'backend.sh("{}",capture_output={})'.format(text,self.capture_output)
 
 
 # foo    a b c
 #        ^non whitespace (note that all contig whitespace is at most length 1 bc of \s+)
+# foo a bar b car 
+# foo(a,bar(b,car()))
 class SSpacecall(State):
     def __init__(self,parent,func_name):
         super().__init__(parent)
         self.func_name = func_name
         self.argc = self.argc_of_fname(self.func_name)
+        self.argc_left = self.argc
+        self.debug_name = "SSpacecall[{}]".format(func_name)
 
     def transition(self,t):
-        self.halt = True # transition only runs 1x
-        res = []
-        for i in range(self.argc):
-            dont_abort_verbatim = ['>','>=','<=','==','<','=','*','+','-','/','//'] ##UNFINISHED, Add more to this! in general boolop/binop/unop/cmp. Note i left '=' in since right now we parse '==' as '=','='.
-            over = Overloader(self,SNormal(self,Tok(TokTyp.SOL,'','')))
-            over.prev_non_ws = None # local var used by lambdas. Last non-whitespace char seen
-            def pre(t): # keep track of last non-whitespace seen
-                if t.typ != TokTyp.WHITESPACE:
-                    over.prev_non_ws = t
+        if self.argc == 0:
+            return POP ##todo make this better so that "sum one one" works
+        self.argc_left -= 1
+        if self.argc_left == 0:
+            self.halt = True
 
-            over.pre = pre # by closure 'pre' will properly hold the correct references to 'over'
-            over.pop = lambda t: (t.typ == TokTyp.WHITESPACE and t.prev_non_ws.verbatim not in dont_abort_verbatim)
-            res.append(self.run_next(over))
-        return ','.join(res)
+        dont_abort_verbatim = ['>','>=','<=','==','<','=','*','+','-','/','//'] ##UNFINISHED, Add more to this! in general boolop/binop/unop/cmp. Note i left '=' in since right now we parse '==' as '=','='.
+        over = Overloader(self,SNormal(self,Tok(TokTyp.SOL,'','')))
+        over.prev_non_ws = None # local var used by lambdas. Last non-whitespace char seen
+        def pre_trans(t): # keep track of last non-whitespace seen
+            if t.typ != TokTyp.WHITESPACE:
+                over.prev_non_ws = t
+
+        over.pre_trans = pre_trans # by closure 'pre' will properly hold the correct references to 'over'
+        over.pop = lambda t: (t.typ == TokTyp.WHITESPACE and (over.prev_non_ws is None or over.prev_non_ws.verbatim not in dont_abort_verbatim))
+        return self.run_same(over) + ','
 
     def post(self,text):
-        return self.func_name+'('+text+')'
+        self.rewind() ## TODO fix this grossness, or just accept it. it aligns it so when caller calls next() they recv the last space of the macro, which is imp for recursive macros
+        return self.func_name+'('+text[:-1]+')' # kill the last comma with :-1
 
 class Overloader(State):
     def __init__(self,parent,state):
         super().__init__(parent)
+        self.debug_name = "Overloader[{}]".format(state.debug_name)
         self.inner = state
-        self.pre = lambda: None
-        self.post = lambda: None
-        self.pop = lambda: False
-        self.override = lambda: NONE
+        self.pre_trans = lambda t: None
+        self.post_trans = lambda t: None
+        self.pop = lambda t: False
+        self.override = lambda t: NONE
         self.use_override = [] # list of tokens for which override(t) should be used in place of inner.transition(t)
     def transition(self,t): ##maybe allow pre/post to modify res, or something like that. Or be able to selectively use an over.alt(t) function instead of inner.trans whenever self.usealt(t) is true?
         if self.pop(t): return POP
-        self.pre(t)
+        self.pre_trans(t)
         if t in self.use_override:
             res = self.override(t)
         else:
             res = self.inner.transition(t)
-        self.post(t)
+        self.post_trans(t)
         return res
 
 # the first state just used at the start of the line
 class SInitial(State):
+    def __init__(self,parent,tstream, globals, debug):
+        super().__init__(parent, tstream=tstream, globals=globals, debug=debug)
+        self.debug_name = "SInitial"
+        self.debug = debug
     def transition(self,t):
         self.halt = True # this is a 1 shot transition function
         ##This should handle the ">a" syntax and the quick-fn-def syntax, and should do a self.run_same to SNormal if neither case is found
 
-        res = self.run_same(SNormal(self,Tok(TokTyp.SOL,'','')))
+        ## and : linestart syntax for sh line
+        if t.typ == TokTyp.COLON:
+            res = self.run_next(SShmode(self,capture_output=False)) ##allow it to kill itself from eol
+        else:
+            res = self.run_same(SNormal(self,Tok(TokTyp.SOL,'','')))
         assertmsg(len(self._tstream)==0,'tstream should be empty since SInitial should consume till EOL')
         return res
 
@@ -412,14 +473,20 @@ def tokenize(s):
 # the main function that run the parser
 # It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
 def parse(line,globals,debug=False):
+    debug = True
+    debug = Debug(debug)
     token_list = tokenize(line)
+    debug.print(token_list)
     tstream = TokStream(token_list)
-    init = SInitial(parent=None, tstream=tstream, globals=globals)
+    init = SInitial(parent=None, tstream=tstream, globals=globals, debug=debug)
     out = init.run()
     return out
 
-out = parse('test',{})
-print(out)
+#out = parse('test',{})
+#u.blue('========')
+#out = parse(':test',{})
+#out = parse('x = (sh{test}) + 1',{})
+#print(out)
 
 #parse("fname,linect = %parse sh{wc -l $file} (str $1, int $2)")
 #parse("z = %parselines1  x (str $1, int $2)")

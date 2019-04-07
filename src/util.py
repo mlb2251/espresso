@@ -28,10 +28,10 @@ def clear_repl_tmpfiles():
     del shutil
 
 def die(s):
-    raise VerbatimExc(mk_red("Error:"+str(s)))
+    raise VerbatimExc(mk_r("Error:"+str(s)))
 
 def warn(s):
-    print(mk_yellow("WARN:"+s))
+    print(mk_y("WARN:"+s))
 
 # cause nobody likes ugly paths
 def pretty_path(p):
@@ -193,10 +193,10 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
             # build final result
             command = "+{} {}".format(lineno,fpath_abs)
             result = "{} {} {}".format(
-                    mk_underline(mk_red(fname+" @ "+lineno))+mk_red(':'),
-                    mk_gray('('+fpath+')'),
-                    mk_purple('['+str(try_pretty_tb.cmdcount)+']'),
-                    mk_green(fn_name),
+                    mk_underline(mk_r(fname+" @ "+lineno))+mk_r(':'),
+                    mk_g('('+fpath+')'),
+                    mk_p('['+str(try_pretty_tb.cmdcount)+']'),
+                    mk_g(fn_name),
                     )
             if includes_code:
                 code_num_spaces = code_line.index(code_line.strip()[0])
@@ -204,13 +204,13 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
                 lineno_fmtd = '{:>6}: '.format(lineno)
                 lineno_width = len(lineno_fmtd)
                 result += '\n{}{}'.format(
-                        mk_bold(mk_green(lineno_fmtd)),
-                        mk_yellow(code_line)
+                        mk_bold(mk_g(lineno_fmtd)),
+                        mk_y(code_line)
                         )
             if includes_arrow:
                 arrow_num_spaces = arrow.index(arrow.strip()[0])
                 offset = lineno_width + arrow_num_spaces - code_num_spaces
-                result += '\n{}{}'.format(' '*offset,mk_bold(mk_green('^here')))
+                result += '\n{}{}'.format(' '*offset,mk_bold(mk_g('^here')))
             try_pretty_tb.cmdcount += 1
             return (result,command)
 
@@ -225,17 +225,17 @@ def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text
         if given_text:
             # e[-2][:-1] is the exception str eg 'NameError: name 'foo' is not defined'
             # silly ['']s are just to add extra newlines
-            formatted = [''] + [mk_red(e[-2][:-1])] + list(formatted) + ['']
+            formatted = [''] + [mk_r(e[-2][:-1])] + list(formatted) + ['']
         else:
-            formatted = [''] + [mk_red(e)] + list(formatted) + ['']
+            formatted = [''] + [mk_r(e)] + list(formatted) + ['']
 
         return '\n'.join(formatted)
     except Exception as e2:
         warn("(ignorable) Failed to Prettify exception, using default format. Note that the prettifying failure was due to: {}".format(exception_str(e2)))
         if given_text:
-            return (mk_red(e),[])
+            return (mk_r(e),[])
         else:
-            return (mk_red(exception_str(e)),[])
+            return (mk_r(exception_str(e)),[])
 
 
 
@@ -254,17 +254,17 @@ def color(s,c):
 
 
 # color a string
-def mk_green(s):
+def mk_g(s):
     return color(s,Fore.GREEN)
-def mk_red(s):
+def mk_r(s):
     return color(s,Fore.RED)
-def mk_purple(s):
+def mk_p(s):
     return color(s,Fore.MAGENTA)
-def mk_blue(s):
+def mk_b(s):
     return color(s,Fore.BLUE)
-def mk_cyan(s):
+def mk_c(s):
     return color(s,Fore.CYAN)
-def mk_yellow(s):
+def mk_y(s):
     return color(s,Fore.YELLOW)
 def mk_gray(s):
     return color(s,'\033[90m')
@@ -276,18 +276,18 @@ def mk_underline(s):
     return color(s,'\033[4m')
 
 # color a string then print it immediately
-def green(s):
-    print(mk_green(s))
-def red(s):
-    print(mk_red(s))
-def purple(s):
-    print(mk_purple(s))
-def blue(s):
-    print(mk_blue(s))
-def cyan(s):
-    print(mk_cyan(s))
-def yellow(s):
-    print(mk_yellow(s))
+def g(s):
+    print(mk_g(s))
+def r(s):
+    print(mk_r(s))
+def p(s):
+    print(mk_p(s))
+def b(s):
+    print(mk_b(s))
+def c(s):
+    print(mk_c(s))
+def y(s):
+    print(mk_y(s))
 def gray(s):
     print(mk_gray(s))
 
@@ -298,20 +298,59 @@ def underline(s):
     print(mk_underline(s))
 
 # color and BOLD a string then print it immediately
-def bgreen(s):
-    print(mk_green(mk_bold(s)))
-def bred(s):
-    print(mk_red(mk_bold(s)))
-def bpurple(s):
-    print(mk_purple(mk_bold(s)))
-def bblue(s):
-    print(mk_blue(mk_bold(s)))
-def bcyan(s):
-    print(mk_cyan(mk_bold(s)))
-def byellow(s):
-    print(mk_yellow(mk_bold(s)))
+def bg(s):
+    print(mk_g(mk_bold(s)))
+def br(s):
+    print(mk_r(mk_bold(s)))
+def bp(s):
+    print(mk_p(mk_bold(s)))
+def bb(s):
+    print(mk_b(mk_bold(s)))
+def bc(s):
+    print(mk_c(mk_bold(s)))
+def by(s):
+    print(mk_y(mk_bold(s)))
 def bgray(s):
     print(mk_gray(mk_bold(s)))
+
+class Debug:
+    def __init__(self, value):
+        self.debug = value
+    def set(self,value):
+        self.debug = value
+    def print(self,*args):
+        if self.debug:
+            print(*args)
+    def g(self,s):
+        self.print(mk_g(s))
+    def r(self,s):
+        self.print(mk_r(s))
+    def p(self,s):
+        self.print(mk_p(s))
+    def b(self,s):
+        self.print(mk_b(s))
+    def c(self,s):
+        self.print(mk_c(s))
+    def y(self,s):
+        self.print(mk_y(s))
+    def gray(self,s):
+        self.print(mk_gray(s))
+    def bg(self,s):
+        self.print(mk_g(mk_bold(s)))
+    def br(self,s):
+        self.print(mk_r(mk_bold(s)))
+    def bp(self,s):
+        self.print(mk_p(mk_bold(s)))
+    def bb(self,s):
+        self.print(mk_b(mk_bold(s)))
+    def bc(self,s):
+        self.print(mk_c(mk_bold(s)))
+    def by(self,s):
+        self.print(mk_y(mk_bold(s)))
+    def bgray(self,s):
+        self.print(mk_gray(mk_bold(s)))
+
+
 
 
 # you can actually run this file and use it to format any exception you get.
