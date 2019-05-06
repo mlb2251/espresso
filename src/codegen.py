@@ -12,6 +12,8 @@
 ## assertion based coding. After all, we're going for slow-but-effective. And assertions can be commented in the very final build. This is the python philosophy - slow and effective, but still fast enough
 
 
+## would be interesting to rewrite in Rust. ofc doesn't have all the features we actually want bc in particular we should be able to override parse_args or whatever dynamically. And list of callable()s would have to be passed here.
+
 
 from enum import Enum,unique
 import re
@@ -123,7 +125,7 @@ class TokStream:
         return res
     def step(self,ntoks=1):
         self.idx += ntoks
-        u.gray("'"+self[0].verbatim+"'" if self[0] is not None else 'None')
+        #u.gray("'"+self[0].verbatim+"'" if self[0] is not None else 'None')
     def skip_whitespace(self):
         if self[0].typ == TokTyp.WHITESPACE:
             self.step() #note you can never have mult whitespaces in a row since they consolidate by \s+
@@ -473,7 +475,7 @@ def tokenize(s):
 # the main function that run the parser
 # It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
 def parse(line,globals,debug=False):
-    debug = True
+    #debug = True
     debug = Debug(debug)
     token_list = tokenize(line)
     debug.print(token_list)

@@ -3,6 +3,7 @@ from importlib import reload
 
 import subprocess as sp
 import os
+import sys
 homedir = os.environ['HOME']
 src_path = os.path.dirname(os.path.realpath(__file__))+'/'
 #src_path = homedir+'/espresso/src/'
@@ -17,7 +18,7 @@ def init_dirs():
     dirs = [src_path,data_path,error_path]
     for d in dirs:
         if not os.path.isdir(d):
-            blue('created:'+d)
+            b('created:'+d)
             os.makedirs(d)
 
 # not used right now
@@ -47,20 +48,20 @@ def module_ls():
 
 # takes the result of sys.modules as an argument
 # 'verbose' will cause the unformatted exception to be output as well
-# TODO passing in sys.modules may be unnecessary bc util.py may share the same sys.modules
-# as everything else. Worth checking.
-def reload_modules(mods_dict,verbose=False):
-    failed_mods = []
-    for mod in module_ls():
-        if mod in mods_dict:
-            try:
-                reload(mods_dict[mod])
-                #blue('reloaded '+mod)
-            except Exception as e:
-                failed_mods.append(mod)
-                print(format_exception(e,src_path,ignore_outermost=1,verbose=verbose))
-                pass
-    return failed_mods # this is TRUTHY if any failed
+# yes, sys.modules conveniently is the one used by whoever imported util.py 
+# and yes, this even reloads utils itself!
+def reload_modules(verbose=False):
+    while True:
+        for mod in module_ls():
+            if mod in sys.modules:
+                try:
+                    reload(sys.modules[mod])
+                except Exception as e:
+                    print(format_exception(e,src_path,ignore_outermost=1,verbose=verbose))
+                    break # failure detected
+        else: # nobreak
+            return # completed successfully
+        input(mk_g("[Reload with ENTER]"))
 
 
 class PrettifyErr(Exception): pass
@@ -84,9 +85,9 @@ def exception_str(e):
 def format_exception(e,relevant_path_piece,tmpfile=None,verbose=False,given_text=False,ignore_outermost=0):
     if verbose:
         if given_text:
-            blue(''.join(e))
+            b(''.join(e))
         else:
-            blue(exception_str(e))
+            b(exception_str(e))
     try:
         if given_text:
             raw_tb = e
@@ -381,10 +382,11 @@ class Debug:
 #    nvim $line
 #}
 
+#TODO use argparse for this
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 3:
-        red("call like: p3 "+sys.argv[0]+" /path/to/file.py /path/to/stderr/file")
+        r("call like: p3 "+sys.argv[0]+" /path/to/file.py /path/to/stderr/file")
     if len(sys.argv) == 5: #optionally pass a relevant path piece. otherwise it'll assume no relevant piece (often this is ok bc exceptions dont always contain full paths anyways
         relevant_path_piece = argv[3]
     file = sys.argv[1]

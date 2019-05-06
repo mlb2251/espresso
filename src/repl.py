@@ -4,6 +4,7 @@ import os
 from importlib import reload
 import traceback as tb
 import ast
+import main # just so it gets reloaded by reload_modes, someone has to import it!
 
 import codegen
 import util as u
@@ -128,16 +129,38 @@ readline.set_completer(completer)
 # this is the Repl called from main.py
 # Repl.next() is the fundamental function that gets input, parses it, and runs it
 class Repl:
-    def __init__(self,state):
-        self.state=state #self.state is a ReplState (defined in main.py, intentionally not here for reload() reasons)
+    def __init__(self,repl=None):
+        self.globs= dict() # globals dict used by exec(). TODO Should actually be initialized to whatever pythons globals() is initialized to
+        self.code=[] # a list containing all the generated python code so far. Each successful line the REPL runs is added to this
+        self.mode= 'speedy'    # 'normal' or 'speedy'
+        self.banner='[banner uninitialized]>>>' #the banner is that thing that looks like '>>> ' in the python interpreter for example
+        self.banner_uncoloredlen = len(self.banner) # the length of the banner, ignoring the meta chars used to color it
+        self.banner_cwd= '' # the length of the banner, ignoring the meta chars used to color it
+        self.debug=False  #if this is True then parser output is generated. You can toggle it with '!debug'
+        self.communicate=[] # for passing messages between main.py and repl.py, for things like hard resets and stuff
+        self.verbose_exceptions=False #if this is true then full raw exceptions are printed in addition to the formatted ones
+        self._magic = "this is proof that I'm an espresso object"
+
+        if repl is not None:
+            self._load(repl)
         #readline.set_completion_display_matches_hook(CustomCompleterDisplayHook(self)) # TODO uncomment
 
-    def get_state(self):
-        return self.state
+    def _load(self, repl):
+        if hasattr(repl,'_magic') and repl._magic == self._magic: # necessary due to module reloading
+            d = repl.__dict__
+        elif isinstance(repl,dict):
+            d = repl
+        else:
+            print("[err] unable to load from {} as it is not a dict or Repl object".format(repl))
+            breakpoint()
+            return
+        for key in self.__dict__.keys(): # only import keys that are in the newest version
+            if key in d.keys():
+                setattr(self,key,d[key])
 
-    def next(self):
-        if self.state.banner_cwd != os.getcwd(): self.update_banner()
-        line = self.get_input()
+    # updates the state based on communications sent through the list ReplState.communication
+
+    def next(self,line):
         if line is None: return
         if len(line.strip()) == 0: return
         # for convenience, 'ls' or 'cd [anything]' will change the mode to speedy
@@ -156,28 +179,28 @@ class Repl:
     def try_metacommands(self,line):
         if len(line) == 0: return False
         if line.strip() == '%':
-            if self.state.mode != 'speedy':
-                self.state.mode = 'speedy'
+            if self.mode != 'speedy':
+                self.mode = 'speedy'
             else:
-                self.state.mode = 'normal'
+                self.mode = 'normal'
             self.update_banner()
             u.gray("metacommand registered")
             return True
         # handle metacommands
         if line[0] == '!':
             if line.strip() == '!print':
-                u.y('\n'.join(self.state.code))
+                u.y('\n'.join(self.code))
             if line.strip() == '!debug':
-                self.state.debug = not self.state.debug
+                self.debug = not self.debug
             if line.strip() == '!verbose_exc':
-                self.state.verbose_exceptions = not self.state.verbose_exceptions
+                self.verbose_exceptions = not self.verbose_exceptions
             if line.strip() == '!reset':
-                self.state.communicate += ['reset state']
+                self.__init__(None)
             #if line.strip() == '!cleanup':  #clears the /repl-tmpfiles directory
                 #u.clear_repl_tmpfiles()
-                #os.makedirs(os.path.dirname(self.state.tmpfile))
+                #os.makedirs(os.path.dirname(self.tmpfile))
             #if line.strip() == '!which':
-                #print(self.state.tmpfile)
+                #print(self.tmpfile)
             if line.strip() == '!help':
                 u.b('Currently implemented macros listing:')
                 u.p('\n'.join(codegen.macro_argc.keys()))
@@ -187,45 +210,28 @@ class Repl:
 
     # the banner is like the '>>> ' in the python repl for example
     def update_banner(self):
-        self.state.banner_cwd = os.getcwd()
-        prettycwd = u.pretty_path(self.state.banner_cwd)
-        if self.state.mode == 'normal':
+        self.banner_cwd = os.getcwd()
+        prettycwd = u.pretty_path(self.banner_cwd)
+        if self.mode == 'normal':
             banner_txt = "es:"+prettycwd+" > "
-            self.state.banner_uncoloredlen = len(banner_txt)
-            self.state.banner = u.mk_g(banner_txt)
-        if self.state.mode == 'speedy':
+            self.banner_uncoloredlen = len(banner_txt)
+            self.banner = u.mk_g(banner_txt)
+        if self.mode == 'speedy':
             banner_txt = "es:"+prettycwd+" $ "
-            self.state.banner_uncoloredlen = len(banner_txt)
-            self.state.banner = u.mk_y(banner_txt)
+            self.banner_uncoloredlen = len(banner_txt)
+            self.banner = u.mk_y(banner_txt)
 
     # prompts user for input and returns the line they enter.
     def get_input(self):
+        if self.banner_cwd != os.getcwd(): self.update_banner()
         try:
-            # MUST reload everything bc this is the first step after taking input
-            # so may have been sitting at the input() screen for a while
-            # so everything should be reloaded in case of syntax errors
-            # Note that this even sucessfully reloads itself... it reloads
-            # sys.modules['repl'] across all these files so that when main()
-            # calls repl.Repl() next it will use the new one
-            # reload all source files (branches out to EVERYTHING including backend and other things not directly imported here)
             set_tabcomplete(True) # just put this here in case it gets set to False by multiline then somehow the interpreter drops out intoj
-            line = input(self.state.banner)
-            while True:
-                failed_mods = u.reload_modules(sys.modules,verbose=self.state.verbose_exceptions)
-                if not failed_mods: # empty list is untruthy
-                    break
-                if 'repl' in failed_mods:
-                    u.blue('error in repl.py, breaking to main.py to recompile') # fuck ya, clever boiiii
-                    self.state.communicate += ['drop out of repl to reload from main']
-                    return
-                line = input(u.mk_g("[Reload with ENTER]"))
-                if self.try_metacommands(line): #eg '!verbose_exc'
-                    return
+            line = input(self.banner)
         except KeyboardInterrupt: # ctrl-c lets you swap modes quickly TODO instead have this erase the current like like in the normal python repl
-            if self.state.mode == 'speedy':
-                self.state.mode = 'normal'
-            elif self.state.mode == 'normal':
-                self.state.mode = 'speedy'
+            if self.mode == 'speedy':
+                self.mode = 'normal'
+            elif self.mode == 'normal':
+                self.mode = 'speedy'
             self.update_banner()
             print('')
             return
@@ -240,18 +246,18 @@ class Repl:
         # MULTILINE STATEMENTS
         if line.strip()[-1] == ':': # start of an indent block
             set_tabcomplete(False)
-            if self.state.mode == 'speedy': u.gray('dropping into normal mode for multiline')
+            if self.mode == 'speedy': u.gray('dropping into normal mode for multiline')
             lines = [line]
             while True:
-                line = input(u.mk_g(' '*(self.state.banner_uncoloredlen-1)+'|'))
+                line = input(u.mk_g(' '*(self.banner_uncoloredlen-1)+'|'))
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
                 lines.append(line)
-            new_code += [codegen.parse(line,self.state.globs,debug=self.state.debug) for line in lines]
+            new_code += [codegen.parse(line,self.globs,debug=self.debug) for line in lines]
         else:
-            if self.state.mode == 'speedy':
+            if self.mode == 'speedy':
                 line = ':'+line.strip()
             # SPEEDY/NORMAL MODE
-            new_code.append(codegen.parse(line,self.state.globs,debug=self.state.debug))
+            new_code.append(codegen.parse(line,self.globs,debug=self.debug))
             #to_undo = 1
         return new_code
 
@@ -273,16 +279,16 @@ class Repl:
             as_ast = ast.parse(codestring,mode='single') # parse into a python ast object
             as_ast = ast.fix_missing_locations(as_ast)
             code = compile(as_ast,'<ast>','single')
-            exec(code,self.state.globs) #passing locals in causes it to only update locals and not globals, when really we just want globals to be updated
+            exec(code,self.globs) #passing locals in causes it to only update locals and not globals, when really we just want globals to be updated
             #print(ast.dump(as_ast))
-            self.state.code += new_code # keep track of successfully executed code
+            self.code += new_code # keep track of successfully executed code
         except u.VerbatimExc as e:
             print(e)
         except Exception as e:
             # This is where exceptions for the code go.
             # TODO make em look nicer by telling format_exception this is the special case of a repl error thrown by exec() or eval()
             # (for this you may wanna have ast.parse() in a separate try-except to differentiate. It'll catch syntax errors specifically.
-            print(u.format_exception(e,['<string>',u.src_path],verbose=self.state.verbose_exceptions))
+            print(u.format_exception(e,['<string>',u.src_path],verbose=self.verbose_exceptions))
 
 
 
