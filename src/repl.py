@@ -235,8 +235,10 @@ class Repl:
             print('')
             return
         except EOFError: # exit with ctrl-d
-            print('')
-            exit(0)
+            print('\n[wrote history]')
+            import readline
+            readline.write_history_file(u.histfile)
+            sys.exit(0)
         return line
 
 # takes a line of input and generates a list of lines of final python code using codegen.parse()

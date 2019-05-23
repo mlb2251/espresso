@@ -9,6 +9,7 @@ src_path = os.path.dirname(os.path.realpath(__file__))+'/'
 #src_path = homedir+'/espresso/src/'
 data_path = homedir+'/.espresso/'
 error_path = data_path+'error_handling/'
+histfile = os.path.join(data_path+'eshist')
 #repl_path = data_path+'repl-tmpfiles/'
 #pipe_dir = data_path+'pipes/'
 pwd_file = data_path+'.{}.PWD'.format(os.getpid())
@@ -40,6 +41,7 @@ def pretty_path(p):
 
 # returns ['util','repl','main',...] These are the names of the source modules.
 # this is used in reload_modules()
+# "It is generally not very useful to reload built-in or dynamically loaded modules. Reloading sys, __main__, builtins and other key modules is not recommended. In many cases extension modules are not designed to be initialized more than once, and may fail in arbitrary ways when reloaded."
 def module_ls():
     files = os.listdir(src_path)
     files = list(filter(lambda x:x[-3:]=='.py',files)) # only py files

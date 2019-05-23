@@ -17,32 +17,38 @@ import util as u
 import argparse
 
 import readline
-histfile = os.path.join(u.error_path+'eshist')
+histfile = os.path.join(u.error_path+'eshist2')
 HISTMAX=1000
 
 # clear oldest history if needed
-with open(histfile,'r') as f:
-    text = f.read()
-    if text.count('\n') > HISTMAX:
-        listform = text.split('\n')
-        open(histfile,'w').write('\n'.join(listform[-HISTMAX//2:]))
-        del listform
-del text
+#with open(histfile,'r') as f:
+#    text = f.read()
+#    if text.count('\n') > HISTMAX-10: # clear it if it's near full. seems to stop at 998 inst of 1000 otherwise
+#        listform = text.split('\n')
+#        open(histfile,'w').write('\n'.join(listform[:-HISTMAX//2]))
+#        del listform
+#del text
 
-try:
-    readline.read_history_file(histfile)
-    # default history len is -1 (infinite), which may grow unruly
-    readline.set_history_length(-1)
-except IOError:
-    pass
-import atexit
+#try:
+#    readline.clear_history()
+#    print("cleared")
+#    readline.read_history_file(histfile)
+#    # default history len is -1 (infinite), which may grow unruly
+#    readline.set_history_length(1000)
+#except IOError:
+#    pass
+#import atexit
+#
+#def cleanup():
+#    readline.write_history_file(histfile)
+
 
 # write history on exiting
-atexit.register(readline.write_history_file, histfile)
+#atexit.register(cleanup)
+#readline.set_auto_history(True)
 
 ## note atexit.register() is a general cleanup fn for when your program randomly exits at any time -- worth looking at more!
 
-del histfile
 
 def get_arguments():
     parser = argparse.ArgumentParser(description='Espresso programming language')
@@ -109,6 +115,9 @@ def do_repl(config):
     print("Boot time: {:.3f}".format(time.time()-_start_time))
     # This is the important core loop!
     while True:
+
+        #readline.write_history_file(histfile)
+        #print("hist len: {} last item: {}".format(readline.get_current_history_length(), readline.get_history_item(readline.get_current_history_length())))
         try:
             line = the_repl.get_input()
             u.reload_modules(verbose=the_repl.verbose_exceptions)
