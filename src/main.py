@@ -2,6 +2,9 @@
 ## NOTE THAT THIS IS NOT THE PATH TO PYTHON# ON EVERYONES COMPUTER SO IT PROB WONT WORK FOR MOST PPL SO FIX THAT
 # MAIN
 
+import time
+_start_time = time.time()
+
 from importlib import reload
 import sys
 import os
@@ -74,7 +77,6 @@ u.init_dirs()
 # Wouldn't be too hard to fix this
 # (you could pass args by inserting them into the prelude somehow)
 def do_compile(config):
-    infile = sys.argv[1]
     #outfile = "a_out.py"
 
     code = prelude
@@ -104,6 +106,7 @@ def do_repl(config):
     for line in prelude:
         the_repl.run_code([line])
     the_repl.update_banner()
+    print("Boot time: {:.3f}".format(time.time()-_start_time))
     # This is the important core loop!
     while True:
         try:
@@ -115,7 +118,7 @@ def do_repl(config):
             print(e)
         except Exception as e:
             #the program will never crash!!! It catches and prints exceptions and then continues in the while loop!
-            print(u.format_exception(e,u.src_path,verbose=repl.verbose_exceptions))
+            print(u.format_exception(e,u.src_path,verbose=the_repl.verbose_exceptions))
 
 
 def main():

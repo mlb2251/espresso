@@ -66,30 +66,43 @@ class TokTyp(Enum):
             return u.mk_gray("WS")
         return self.name
 
+#TODO lol instead of this hackiness you should really have all these defined as constants, even if theyre redundant with toktyp or something
+# define all the TokTyps as unique global constants
+str_of_const = dict() # use this dict to look up a the name 'QUOTE2' given the constant 15 or whatever (if QUOTE2 == 15)
+toktyp_of_const = dict() # same but gets the actual TokTyp with regex and all
+const_of_toktyp = dict()
+for i,toktyp in enumerate(TokTyp):
+    globals()[toktyp.name] = i
+    str_of_const[i] = toktyp.name
+    toktyp_of_const[i] = toktyp
+    const_of_toktyp[toktyp] = i
+
 def closer_of_opener(opener_tok):
     if isinstance(opener_tok,Tok):
         opener_tok = opener_tok.typ
 
-    if opener_tok == TokTyp.LPAREN:
-        return Tok(TokTyp.RPAREN,'',')')
-    if opener_tok == TokTyp.DOLLARPAREN:
-        return Tok(TokTyp.RPAREN,'',')')
-    if opener_tok == TokTyp.LBRACE:
-        return Tok(TokTyp.RBRACE,'','}')
-    if opener_tok == TokTyp.LBRACKET:
-        return Tok(TokTyp.RBRACKET,'',']')
-    if opener_tok == TokTyp.QUOTE1:
-        return Tok(TokTyp.QUOTE1,'','\'')
-    if opener_tok == TokTyp.QUOTE2:
-        return Tok(TokTyp.QUOTE2,'','"')
-    if opener_tok == TokTyp.SOL:
-        return Tok(TokTyp.EOL,'','')
+    if opener_tok == LPAREN:
+        return Tok(RPAREN,'',')')
+    if opener_tok == DOLLARPAREN:
+        return Tok(RPAREN,'',')')
+    if opener_tok == LBRACE:
+        return Tok(RBRACE,'','}')
+    if opener_tok == LBRACKET:
+        return Tok(RBRACKET,'',']')
+    if opener_tok == QUOTE1:
+        return Tok(QUOTE1,'','\'')
+    if opener_tok == QUOTE2:
+        return Tok(QUOTE2,'','"')
+    if opener_tok == SOL:
+        return Tok(EOL,'','')
     raise NotImplementedError
 
 
 # This is a parsed token
 class Tok:
     def __init__(self,typ,data,verbatim):
+        if isinstance(typ,TokTyp):
+            typ = const_of_toktyp[typ]
         self.typ=typ            #e.g. Tok.IDENTIFIER
         self.data=data          # the contents of the capture group of the Tok's regex, if any.
         self.verbatim=verbatim  # e.g. 'foo'. The verbatim text that the regex matched on
@@ -127,7 +140,7 @@ class TokStream:
         self.idx += ntoks
         #u.gray("'"+self[0].verbatim+"'" if self[0] is not None else 'None')
     def skip_whitespace(self):
-        if self[0].typ == TokTyp.WHITESPACE:
+        if self[0].typ == WHITESPACE:
             self.step() #note you can never have mult whitespaces in a row since they consolidate by \s+
 
     ## left commented for now in hopes that we'll have nice clean code that will never need to do this
@@ -298,7 +311,7 @@ class SNormal(State):
         self.closer = closer_of_opener(opener) # closer is a TokTyp
         self.debug_name = "SNormal[{}]".format(opener.verbatim)
     def pre(self):
-        if self.opener.typ != TokTyp.SOL:
+        if self.opener.typ != SOL:
             self.assertpre(self.tok(-1)==self.opener)
     def transition(self,t):
         ## transition(t) always ASSUMES that tstream[0] == t. Feeding an arbitrary token into transition is undefined behavior. Though it should only have an impact on certain peeks
@@ -306,19 +319,19 @@ class SNormal(State):
 
         if t.typ == self.closer.typ:
             return POP
-        elif t.typ == TokTyp.SH_LBRACE:
+        elif t.typ == SH_LBRACE:
             return self.run_next(SShmode(self))
-        elif t.typ in [TokTyp.LPAREN, TokTyp.LBRACKET, TokTyp.LBRACE]:
+        elif t.typ in [LPAREN, LBRACKET, LBRACE]:
             return self.run_next(SNormal(self,t))
-        elif t.typ in [TokTyp.QUOTE1, TokTyp.QUOTE2]:
+        elif t.typ in [QUOTE1, QUOTE2]:
             return self.run_next(SQuote(self,t))
-        elif t.typ == TokTyp.ID and self.check_callable(t.data) and (self.tok(1) is None or self.tok(1).typ == TokTyp.WHITESPACE):
+        elif t.typ == ID and self.check_callable(t.data) and (self.tok(1) is None or self.tok(1).typ == WHITESPACE):
             self.step() # now tstream[0] pointing to the whitespace
             self.step() # now tstream[0] pointing one beyond whitespace (which can no longer be a whitespace since WS = \s+)
             return self.run_same(SSpacecall(self,t.data))
         return VERBATIM
     def post(self,text):
-        if self.opener.typ != TokTyp.SOL:
+        if self.opener.typ != SOL:
             self.assertpost(self.tok().typ == self.closer.typ)
         return self.opener.verbatim + text + self.closer.verbatim
 
@@ -362,17 +375,17 @@ class SShmode(State):
         self.debug_name = "SShmode"
         self.capture_output = capture_output
     def transition(self,t):
-        if t.typ == TokTyp.LBRACE:
+        if t.typ == LBRACE:
             self.brace_depth += 1
             return VERBATIM
-        elif t.typ == TokTyp.RBRACE:
+        elif t.typ == RBRACE:
             self.brace_depth -= 1
             if self.brace_depth == 0:
                 return POP
             return VERBATIM
-        elif t.typ in [TokTyp.QUOTE1, TokTyp.QUOTE2]:
+        elif t.typ in [QUOTE1, QUOTE2]:
             return self.run_next(SQuote(self,t))
-        elif t.typ == TokTyp.DOLLARPAREN:
+        elif t.typ == DOLLARPAREN:
             return self.run_next(SNormal(self,t))
         return VERBATIM
     def post(self,text):
@@ -399,14 +412,14 @@ class SSpacecall(State):
             self.halt = True
 
         dont_abort_verbatim = ['>','>=','<=','==','<','=','*','+','-','/','//'] ##UNFINISHED, Add more to this! in general boolop/binop/unop/cmp. Note i left '=' in since right now we parse '==' as '=','='.
-        over = Overloader(self,SNormal(self,Tok(TokTyp.SOL,'','')))
+        over = Overloader(self,SNormal(self,Tok(SOL,'','')))
         over.prev_non_ws = None # local var used by lambdas. Last non-whitespace char seen
         def pre_trans(t): # keep track of last non-whitespace seen
-            if t.typ != TokTyp.WHITESPACE:
+            if t.typ != WHITESPACE:
                 over.prev_non_ws = t
 
         over.pre_trans = pre_trans # by closure 'pre' will properly hold the correct references to 'over'
-        over.pop = lambda t: (t.typ == TokTyp.WHITESPACE and (over.prev_non_ws is None or over.prev_non_ws.verbatim not in dont_abort_verbatim))
+        over.pop = lambda t: (t.typ == WHITESPACE and (over.prev_non_ws is None or over.prev_non_ws.verbatim not in dont_abort_verbatim))
         return self.run_same(over) + ','
 
     def post(self,text):
@@ -444,10 +457,10 @@ class SInitial(State):
         ##This should handle the ">a" syntax and the quick-fn-def syntax, and should do a self.run_same to SNormal if neither case is found
 
         ## and : linestart syntax for sh line
-        if t.typ == TokTyp.COLON:
+        if t.typ == COLON:
             res = self.run_next(SShmode(self,capture_output=False)) ##allow it to kill itself from eol
         else:
-            res = self.run_same(SNormal(self,Tok(TokTyp.SOL,'','')))
+            res = self.run_same(SNormal(self,Tok(SOL,'','')))
         assertmsg(len(self._tstream)==0,'tstream should be empty since SInitial should consume till EOL')
         return res
 
@@ -462,7 +475,7 @@ def tokenize(s):
             # 'continue' if no match
             if match is None: continue
             # 'continue' if sh_linestart isn't at start of line
-            if t == TokTyp.SH_LINESTART and remaining != s: continue
+            if t == SH_LINESTART and remaining != s: continue
 
             remaining = remaining[match.end():]
             grps = match.groups()

@@ -163,7 +163,6 @@ class Repl:
     def next(self,line):
         if line is None: return
         if len(line.strip()) == 0: return
-        # for convenience, 'ls' or 'cd [anything]' will change the mode to speedy
 
         # deal with '!' commands
         if self.try_metacommands(line):
