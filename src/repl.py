@@ -5,6 +5,7 @@ from importlib import reload
 import traceback as tb
 import ast
 import main # just so it gets reloaded by reload_modes, someone has to import it!
+import readline
 
 import codegen
 import util as u
@@ -257,17 +258,17 @@ class Repl:
             else:
                 line = input(u.mk_g(' '*(self.banner_uncoloredlen-1)+'|'))
 
-        except KeyboardInterrupt: # ctrl-c lets you swap modes quickly TODO instead have this erase the current like like in the normal python repl
-            if self.mode == 'speedy':
-                self.mode = 'normal'
-            elif self.mode == 'normal':
-                self.mode = 'speedy'
-            self.update_banner()
+        except KeyboardInterrupt: # ctrl-c lets you swap modes quickly
+            if readline.get_line_buffer().strip() == '':
+                if self.mode == 'speedy':
+                    self.mode = 'normal'
+                elif self.mode == 'normal':
+                    self.mode = 'speedy'
+                self.update_banner()
             print('')
             return
         except EOFError: # exit with ctrl-d
             print('\n[wrote history]')
-            import readline
             readline.write_history_file(u.histfile)
             sys.exit(0)
         return line
@@ -282,6 +283,10 @@ class Repl:
             while True:
                 line = self.get_input(multiline=True)
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
+                if self.compile and line[0] == line.strip()[0]: # checks if indent level is 0
+                    self.line_idx -= 1 # it's rewind time. Here we just take a change to indent level 0 as the end of the multiline block, then we rewind to when getline gets called again it'll deal with that line that had indent=0. The reason we dont lump this line into `lines` is bc lines should only hold a single interpreter statement since ast.parse or compile or whatever is called in 'single' mode.
+                    break
+
                 lines.append(line)
             new_code += [codegen.parse(line,self.globs,debug=self.debug) for line in lines]
         else:
