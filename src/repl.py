@@ -9,6 +9,9 @@ import main # just so it gets reloaded by reload_modes, someone has to import it
 import codegen
 import util as u
 
+
+MAGIC = "this is proof that I'm an espresso object"
+
 ###############################
 ###############################
 # TODO solution to many issues:
@@ -129,34 +132,45 @@ readline.set_completer(completer)
 # this is the Repl called from main.py
 # Repl.next() is the fundamental function that gets input, parses it, and runs it
 class Repl:
-    def __init__(self,repl=None):
+    def __init__(self,config=None,repl=None):
+        if repl is not None:
+            self._load(repl)
+            return
+
+        assert config is not None
+        # DEFAULTS
+        self.config = config
         self.globs= dict() # globals dict used by exec(). TODO Should actually be initialized to whatever pythons globals() is initialized to
         self.code=[] # a list containing all the generated python code so far. Each successful line the REPL runs is added to this
         self.mode= 'speedy'    # 'normal' or 'speedy'
         self.banner='[banner uninitialized]>>>' #the banner is that thing that looks like '>>> ' in the python interpreter for example
         self.banner_uncoloredlen = len(self.banner) # the length of the banner, ignoring the meta chars used to color it
         self.banner_cwd= '' # the length of the banner, ignoring the meta chars used to color it
-        self.debug=False  #if this is True then parser output is generated. You can toggle it with '!debug'
+        self.debug = config.debug #if this is True then parser output is generated. You can toggle it with '!debug'
         self.communicate=[] # for passing messages between main.py and repl.py, for things like hard resets and stuff
         self.verbose_exceptions=False #if this is true then full raw exceptions are printed in addition to the formatted ones
-        self._magic = "this is proof that I'm an espresso object"
+        self._magic = MAGIC
+        self.compile = self.config.compile # bool
+        if self.compile: # this should only fire during default settings, itll get overwritten by _load which is desired
+            self.lines = self.config.lines
+            self.line_idx = -1 # start one before 0
+            self.mode = 'normal'
 
-        if repl is not None:
-            self._load(repl)
         #readline.set_completion_display_matches_hook(CustomCompleterDisplayHook(self)) # TODO uncomment
 
     def _load(self, repl):
-        if hasattr(repl,'_magic') and repl._magic == self._magic: # necessary due to module reloading
+        if hasattr(repl,'_magic') and repl._magic == MAGIC: # necessary due to module reloading
             d = repl.__dict__
         elif isinstance(repl,dict):
             d = repl
         else:
             print("[err] unable to load from {} as it is not a dict or Repl object".format(repl))
-            breakpoint()
             return
-        for key in self.__dict__.keys(): # only import keys that are in the newest version
-            if key in d.keys():
-                setattr(self,key,d[key])
+        #for key in self.__dict__.keys(): # only import keys that are in the newest version
+        #    if key in d.keys():
+        #        setattr(self,key,d[key])
+        for key,val in d.items():
+            setattr(self,key,val)
 
     # updates the state based on communications sent through the list ReplState.communication
 
@@ -221,11 +235,28 @@ class Repl:
             self.banner = u.mk_y(banner_txt)
 
     # prompts user for input and returns the line they enter.
-    def get_input(self):
+    def get_input(self, multiline = False):
+        if self.compile:
+            self.line_idx += 1
+            if self.line_idx >= len(self.lines):
+                print("finished running script")
+                if self.config.repl:
+                    self.compile = False
+                    return self.get_input() # redo getting input, in repl mode this time
+                sys.exit(0)
+            line = self.lines[self.line_idx]
+            print(f"compiling: {line}")
+            return line
+
+        # repl (non compiled)
         if self.banner_cwd != os.getcwd(): self.update_banner()
         try:
             set_tabcomplete(True) # just put this here in case it gets set to False by multiline then somehow the interpreter drops out intoj
-            line = input(self.banner)
+            if not multiline:
+                line = input(self.banner)
+            else:
+                line = input(u.mk_g(' '*(self.banner_uncoloredlen-1)+'|'))
+
         except KeyboardInterrupt: # ctrl-c lets you swap modes quickly TODO instead have this erase the current like like in the normal python repl
             if self.mode == 'speedy':
                 self.mode = 'normal'
@@ -245,21 +276,18 @@ class Repl:
     def gen_code(self,line):
         new_code = [] #this is what we'll be adding our code to
         # MULTILINE STATEMENTS
-        if line.strip()[-1] == ':': # start of an indent block
+        if self.mode == 'normal' and line.strip()[-1] == ':': # start of an indent block
             set_tabcomplete(False)
-            if self.mode == 'speedy': u.gray('dropping into normal mode for multiline')
             lines = [line]
             while True:
-                line = input(u.mk_g(' '*(self.banner_uncoloredlen-1)+'|'))
+                line = self.get_input(multiline=True)
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
                 lines.append(line)
             new_code += [codegen.parse(line,self.globs,debug=self.debug) for line in lines]
         else:
             if self.mode == 'speedy':
                 line = ':'+line.strip()
-            # SPEEDY/NORMAL MODE
             new_code.append(codegen.parse(line,self.globs,debug=self.debug))
-            #to_undo = 1
         return new_code
 
     # takes the output of gen_code and runs it
@@ -285,11 +313,15 @@ class Repl:
             self.code += new_code # keep track of successfully executed code
         except u.VerbatimExc as e:
             print(e)
+            if self.compile:
+                sys.exit(1)
         except Exception as e:
             # This is where exceptions for the code go.
             # TODO make em look nicer by telling format_exception this is the special case of a repl error thrown by exec() or eval()
             # (for this you may wanna have ast.parse() in a separate try-except to differentiate. It'll catch syntax errors specifically.
             print(u.format_exception(e,['<string>',u.src_path],verbose=self.verbose_exceptions))
+            if self.compile:
+                sys.exit(1)
 
 
 

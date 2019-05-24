@@ -17,7 +17,6 @@ import util as u
 import argparse
 
 import readline
-histfile = os.path.join(u.error_path+'eshist2')
 HISTMAX=1000
 
 # clear oldest history if needed
@@ -55,6 +54,8 @@ def get_arguments():
     parser.add_argument('infile', nargs='?', default=None, type=argparse.FileType('r'), help='The optional input file')
     parser.add_argument('--debug', action='store_true', default=False,
             help='Enables full debugging from startup (equivalent to running !debug as first command)')
+    parser.add_argument('--repl', action='store_true', default=False,
+            help='Only useful when infile is provided, in which case this forces the parser to drop into a repl after executing the file')
 #    parser.add_argument('--stable', action='store_true', default=False,
 #            help='Switch global system to use stable espresso and quit')
 #    parser.add_argument('--unstable', action='store_true', default=False,
@@ -108,7 +109,14 @@ def do_repl(config):
 
     # alt. could replace this with a 'communicate' code that tells repl to run its full self.code block
     # initialize the repl
-    the_repl = repl.Repl()
+    config.compile = False
+    if config.infile is not None:
+        config.compile = True
+        #with open(config.infile,'r') as f:
+        config.lines = config.infile.read().split('\n')
+        config.infile.close()
+    the_repl = repl.Repl(config=config)
+
     for line in prelude:
         the_repl.run_code([line])
     the_repl.update_banner()
@@ -121,22 +129,29 @@ def do_repl(config):
         try:
             line = the_repl.get_input()
             u.reload_modules(verbose=the_repl.verbose_exceptions)
-            the_repl = repl.Repl(the_repl) # updates repl to a new version. This must be done outside of the Repl itself bc otherwise changes to methods won't be included.
+            #print(the_repl.line_idx)
+            the_repl = repl.Repl(repl=the_repl) # updates repl to a new version. This must be done outside of the Repl itself bc otherwise changes to methods won't be included.
+            #print(the_repl.line_idx)
             the_repl.next(line)
         except u.VerbatimExc as e:
             print(e)
+            if the_repl.compile:
+                sys.exit(1)
         except Exception as e:
             #the program will never crash!!! It catches and prints exceptions and then continues in the while loop!
             print(u.format_exception(e,u.src_path,verbose=the_repl.verbose_exceptions))
+            if the_repl.compile:
+                sys.exit(1)
 
 
 def main():
     try:
         config = get_arguments()
-        if config.infile is None:
-            do_repl(config)
-        else:
-            do_compile(config)
+        do_repl(config)
+        #if config.infile is None:
+        #    do_repl(config)
+        #else:
+        #    do_compile(config)
     except Exception as e:
         print(u.format_exception(e,u.src_path,verbose=True))
 

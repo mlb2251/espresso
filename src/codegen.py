@@ -5,19 +5,14 @@
 # class AtomCompound, etc: These Atoms are AST components. Each has a .gentext() method that generates the actual final text that the atom should become in the compiled code
 # parse() is the main function here. It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
 
-
 ## TODO next: make SInitial more pretty. I dont htink overloader is the way to go, we shd start in SInit then trans to Snormal not just wrap Snormal.
-
 
 ## assertion based coding. After all, we're going for slow-but-effective. And assertions can be commented in the very final build. This is the python philosophy - slow and effective, but still fast enough
 
-
-## would be interesting to rewrite in Rust. ofc doesn't have all the features we actually want bc in particular we should be able to override parse_args or whatever dynamically. And list of callable()s would have to be passed here.
-
+## would be interesting to rewrite in Rust or Haskell. ofc doesn't have all the features we actually want bc in particular we should be able to override parse_args or whatever dynamically. And list of callable()s would have to be passed here.
 
 from enum import Enum,unique
 import re
-import os
 from util import die,warn,Debug
 import util as u
 import inspect
@@ -159,10 +154,6 @@ def toks_to_typs(tok_list):
 #    global tstream
 #    tstream = TokStream(token_list,globals)
 
-def assertmsg(cond,msg):
-    if cond is False:
-        die("assert failed: "+msg)
-
 ## Specifications and Assumptions:
 ## * transition(t) is always called with tstream[0] being t
 ## * whenever possible we favor run()ing new states only after pointing tstream[0] to the first item that they will be parsing, and we pass any metadata that resulted in their discovery to them. For example when starting a new space-call from "foo 1 2" we were in SNormal mode pointing to 'foo', then we advance twice (through the whitespace) to reach '1' at which point we run_same() SSPACECALL which is fed the proper fname='foo'. Similarly SNormal is initialized by passing it its 'opener' token (e.g. '(') while tstream[0] points one past the opener, as opposed to starting SNormal with tstream[0] pointing to the opener and allowing it to figure that out itself.
@@ -179,8 +170,6 @@ def assertmsg(cond,msg):
     #####^^^^^^^^If it aint broke don't fix it: Just wait until you have a REASON that this is a bad system. Bc right now it works, and it works well^^^^^^^^
     ##### ALSO when you enter SNormal due to a '(' you def wanna be one past that when you first call transition() bc otherwise itll see the '(' and enter into ANOTHER SNormal 
 ## 
-## 
-## 
 NONE = 0
 VERBATIM = 1
 POP = -1
@@ -191,7 +180,7 @@ POP = -1
 # __init__(): use this to declare any variables you need, and of course any constructor arguments you want. Start it by calling super().__init__(parent). The key with this is you should NOT interact with tstream as it is at an undefined position at this point.
     # (note that the undefined position thing is because we allow the constructor to be run, then .step() to be called, then .run_*() to be called. And in fact run_next needs to be called using a constructed state, then it .step()s and then .run()s. Hence __init__ will not be seeing the tstream at any sort of consistent, predictable position when it is initialized)
 # next run() is invoked (generally by a different state calling run_same or run_next). You can't modify run(). It will call the following few functions. Note that we always assume that run() gets called with tstream[0] being the first token that should be processed, and run() will exit with it pointing to the last token that was processed (it will not step beyond this one).
-# pre(): run() will call this first, with no arguments. Use for any setup that depends on tstream. It's best practice to include assertmsg() calls that check that tstream is properly lined up (vastly improves ease of debugging).
+# pre(): run() will call this first, with no arguments. Use for any setup that depends on tstream. It's best practice to include assert calls (w/ messages) that check that tstream is properly lined up (vastly improves ease of debugging).
 # transition():
 #   -only call run_same(child) when tstream[0] points to the first token you want child to see. (Call run_next(child) when tstream[1] points to the first token you want child to see)
 #   -return POP when the NEXT token (tstream[1]) is the one you want your parent to see. Think of POP as pop_next. (Pop does not actually .step(), but you will return from it into the completion of the parent's transition() function so the step() will automatically occur as transition() returns into run() which calls .step and then .transition again)
@@ -218,14 +207,14 @@ class State:
         self.d.r("starting: "+self.debug_name)
         while True:
             if self.tok() is None:
-                assertmsg(len(self._tstream)==0,'if tstream[0] is None that must mean we are out of tokens')
+                assert len(self._tstream)==0,'if tstream[0] is None that must mean we are out of tokens'
                 self.d.print("EOL autopop from run()")
                 break # autopop on EOL
 
             tmp_str = "{}.transition('{}')".format(self.debug_name,self.tok().verbatim)
             self.d.y(tmp_str)
             res = self.transition(self.tok())
-            assertmsg(res is not None, 'for clarity we dont allow transition() to return None. It must return '' or NONE (the global constant) for no extension)')
+            assert res is not None, 'for clarity we dont allow transition() to return None. It must return '' or NONE (the global constant) for no extension)'
             tmp_res = res
             if res == VERBATIM:
                 tmp_res = self.tok().verbatim
@@ -271,12 +260,12 @@ class State:
        m = "pre-assert failed for {}".format(self.debug_name)
        if msg is not None:
            m += ' : ' + msg
-       assertmsg(cond,m)
+       assert cond, m
     def assertpost(self,cond,msg=None):
        m = "post-assert failed for {}".format(self.debug_name)
        if msg is not None:
            m += ' : ' + msg
-       assertmsg(cond,m)
+       assert cond,m
     # functions for managing _tstream and _globals
     # tok()
     # tok(1)
@@ -315,7 +304,7 @@ class SNormal(State):
             self.assertpre(self.tok(-1)==self.opener)
     def transition(self,t):
         ## transition(t) always ASSUMES that tstream[0] == t. Feeding an arbitrary token into transition is undefined behavior. Though it should only have an impact on certain peeks
-        assertmsg(self.tok() is t, "transition(t) assumes that tstream[0] == t and this has been violated")
+        assert self.tok() is t, "transition(t) assumes that tstream[0] == t and this has been violated"
 
         if t.typ == self.closer.typ:
             return POP
@@ -461,7 +450,7 @@ class SInitial(State):
             res = self.run_next(SShmode(self,capture_output=False)) ##allow it to kill itself from eol
         else:
             res = self.run_same(SNormal(self,Tok(SOL,'','')))
-        assertmsg(len(self._tstream)==0,'tstream should be empty since SInitial should consume till EOL')
+        assert len(self._tstream)==0,'tstream should be empty since SInitial should consume till EOL'
         return res
 
 
