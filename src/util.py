@@ -321,9 +321,9 @@ class Debug:
         self.debug = value
     def set(self,value):
         self.debug = value
-    def print(self,*args):
+    def print(self,*args,**kwargs):
         if self.debug:
-            print(*args)
+            print(*args,**kwargs)
     def g(self,s):
         self.print(mk_g(s))
     def r(self,s):

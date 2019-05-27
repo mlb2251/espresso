@@ -62,27 +62,402 @@ def setup_displayhook():
 ## could do heredocs with the stdin pipe of run() probably and
 ## make them behave just like bash heredocs (only one big input
 ## not able to react to stdout or anything)
-def sh(s,capture_output=True):
-    if len(s) == 0: return ''
 
-    s += '\necho $PWD > {}'.format(u.pwd_file)
+
+"""
+capture_output = T/F
+capture_error = T/F
+capture_retcode = T/F
+sh() will return a tuple of length 0 to 3 depending on which of these are True.
+If all are true then (stdout,stderr,retcode) are returned
+If none are true then None is returned
+If capture_stdout=True then just stdout is returned.
+If capture_stdout=True and capture_retcode=True then (stdout,retcode) is returned
+etc.
+
+Q: should sh run .split()? should it trip trailing newlines? If it splits and ends up with a single line should it return it verbatim?
+
+-often times we want it to be .split() right away
+-extremely often we want a \n stripped
+-occasionally we want to remove all empty lines
+
+>result: remove \n automatically until `raw` specified, but leave it to the user to .split it? Hmm
+
+"""
+
+
+def sh(s, capture_output=True, capture_error=False, exception_on_retcode=None):
+    debug = u.Debug(False)
+
+    if exception_on_retcode is None: # set default
+        if capture_output or capture_error:
+            exception_on_retcode = True
+        else:
+            exception_on_retcode = False
+
+    if s == '': # Make a fake completedprocess that looks fine, since the '' program should always return empty strings and success.
+        return SHVal(CompletedProcess(args='',
+                returncode=0,
+                stdout=('' if capture_output else None),
+                stderr=('' if capture_error else None)))
+
+    s += f'\necho $?\001$PWD > {u.pwd_file}' # Note that this will only change the directory if the whole script finishes
 
     stdout = sp.PIPE if capture_output else None
+    stderr = sp.PIPE if capture_error else None
     #/bin/bash -O expand_aliases -i -c 'ls'
     #res = sp.run(['/bin/bash',u.src_path+'backend.sh',s],stdout=stdout)
     try:
-        res = sp.run(['/bin/bash','-O','expand_aliases','-O','checkwinsize','-l','-c',s],stdout=stdout)
-    except KeyboardInterrupt: # catch child interrupts
-        return ''
-    new_dir = open(u.pwd_file).read().strip()
-    os.remove(u.pwd_file)
-    os.chdir(new_dir)
-    if not capture_output:
-        return
-    text =  res.stdout.decode("utf-8")
-    if text == '': return text
-    if text[-1] == '\n': text = text[:-1]
-    return text
+        #res = sp.run(['/bin/bash','-O','expand_aliases','-O','checkwinsize','-l','-c',s],stdout=stdout)
+        res = esrun(['/bin/bash','-O','expand_aliases','-O','checkwinsize','-l','-c',s],
+                stdout=stdout,
+                stderr=stderr,
+                debug=debug,
+                text=True) # replace \r\n with \n, replace \r with \n, decode with utf-8. Basically as long as output is text and not arbitrary binary data then this should be used.
+    except KeyboardInterrupt: # should not happen, tho with race conditions it may
+        raise ValueError(f"esrun() was interrupted at a bad time and was unable to recover. Command may or may not have executed, but stdout, stderr, and error code were unable to be recovered.")
+        #if capture_output or capture_error:
+            # if they requested the output and we can't give it to them then their logic is at risk, so we shouldn't return an empty string instead we should raise an error.
+        #    raise ValueError(f"output of sh() was requested via capture_* but unable to provide it because of ctrl-c during sh setup or teardown")
+        #return SHVal(None, exception_on_retcode)
+
+    try:
+        with open(u.pwd_file,'r') as f:
+            returncode, new_dir = f.read().strip().split('\001')
+        res.returncode = int(returncode) # without this the completeprocess return code is always just 0 since the /bin/bash process succeeds even tho the child (which is our actual process) did not succeed
+        os.remove(u.pwd_file)
+        os.chdir(new_dir)
+    except OSError:
+        pass # common case if pwd_file is not created bc the sh script terminated early. This is fine.
+
+    ret = SHVal(res, exception_on_retcode)
+    global _prev_shval
+    _prev_shval = ret
+    return ret
+
+
+class SHVal:
+    def __init__(self,completed_process, exception_on_retcode):
+        #if completed_process is None and exception_on_retcode:
+        #    raise ValueError(f"nonzero return code: {retcode} and `exception_on_retcode` was specified")
+
+        self.retcode = completed_process.returncode
+        # these will end up being None if it isnt captured and ret() will remove them as well
+        self.out = completed_process.stdout
+        self.err = completed_process.stderr
+
+        if exception_on_retcode and self.retcode != 0:
+            raise ValueError(f"nonzero return code: {self.retcode} and `exception_on_retcode` was specified")
+
+    def line(self,*casters,rest=None): # coerce into a single line if possible by throwin out empty lines, and return that one line
+        if len(casters) == 1 and not callable(casters[0]):
+            casters = casters[0] # thus people can pass in either .line(int,int) or .line([int,int]). Note checking if __iter__ is present is bad bc apparently the type "type" has an __iter__ method, so instead we check callability. Also isinstance() can't be used with typeclass "type"
+        ret = list(filter(None,self.out.split('\n')))
+        if len(ret) != 1:
+            raise ValueError(f".line() was called with multiple lines of output:{self.out}")
+        if len(casters) == 0:
+            return ret[0] # no casting case
+        ret = ret[0].split(' ')
+        if len(casters) == 1 and rest is None:
+            return [casters[0](tkn) for tkn in ret]
+        # len(caster) > 1
+        assert len(casters) <= len(ret)
+        if rest is not None: # `rest` argument autofills the rest of the casters with the given cast
+            casters = list(casters) + [rest]*(len(ret)-len(casters))
+        assert len(casters) == len(ret), f"number of casters ({len(casters)}) does not match number of tokens ({len(ret)}) \ntokens:{ret}\ncasters:{casters}"
+        ret = [casters[i](ret[i]) for i in range(len(ret))]
+        return ret
+
+    def item(self, caster=str): # coerce into single word
+        ret = self.out.strip()
+        if ret.count(' ') == ret.count('\n') == 0:
+            return caster(ret)
+        raise ValueError(f".item() was called with more than just a single word of output:{self.out}")
+
+    """
+    Note that if `length` `casters` or `rest` are specified then lines are returned as a list of lists (lines outer list, tokens inner list)
+
+    Of the following 2 things, it's unclear which is better. The second is much easier to implment. The first could potentially be done by writing a class that inherits from `list` and just add extra methods to it. First is more linear to write perhaps, tho maybe the second way is essentially just as linear. First is more composable ofc. Remember at a certain point you'll want to leave the SshVal world anyways and just manipulate lists and stuff and use all the features of python, and piping will help with that. Just nice to have these convenience methods for the first steps in SshVal.
+
+    1: sh{whatever}.lines().length(4).filter(lambda s: 'example' in s).cast(str,rest=int)
+    2: sh{whatever}.lines(str,rest=int,length=4,filter=lambda s: 'example' in s)
+    """
+    def lines(self,*casters, length=None, rest=None): # return a list of lines
+        if rest is not None and length is None:
+            raise ValueError("for .lines() `rest` can only be used if `length` is also used so it's clear what the proper length of the line should be")
+        if len(casters) == 1 and not callable(casters[0]):
+            casters = casters[0] # for if first argument of `casters` is a list of casters
+
+        lines = self.out.split('\n')
+        if len(casters) == 0 and length is None:
+            return lines # argumentless .lines() call
+
+        lines = [line.split(' ') for line in lines] # tokenize
+
+        # is no length is given but more than one caster is given, then the length is the number of casters
+        # (note that `rest` must be None since `length` is None)
+        if length is None and len(casters) > 1:
+            length = len(casters)
+
+        if length is not None: # kill all lines of wrong lengths
+            lines = list(filter(lambda toks: len(toks) == length, lines))
+
+        res = []
+
+        # single caster case with no length restrictions
+        if length is None and len(casters) == 1:
+            for line in lines:
+                try:
+                    res.append([casters[0](tkn) for tkn in line])
+                except ValueError:
+                    u.y(f'cast failure warning: ignoring line {"".join(line)} with caster {caster[0]}. This may be intentional')
+            return res
+
+        # generic case (any number of casters, potentially `rest`, and definitely `length`)
+        if rest is not None: # `rest` argument autofills the rest of the casters with the given cast
+            casters = list(casters) + [rest]*(length-len(casters))
+
+        assert length == len(casters), f"{length} != {len(casters)}"
+        for line in lines:
+            # apply the ith caster to the ith token and append the resulting list to `res`.
+            try:
+                res.append([caster[i](line[i]) for i in range(length)])
+            except ValueError:
+                u.y(f'cast failure warning: ignoring line {"".join(line)} with caster {caster}. This may be intentional')
+        return res
+
+    # map `fn` over all lines of output
+    def apply(self,fn):
+        ret = list(map(fn, self.lines()))
+    # filter to only include lines that `fn` returns True on
+    # Note that the default value of None will cause all empty lines to be filtered out
+
+    def filter(self,fn=None):
+        ret = list(filter(fn, self.lines()))
+        return ret
+    # filter but `fn` takes a list of tokens for each line
+    def filtertokens(self,fn): # run given fn on each line after splitting the line into tokens by spaces
+        ret = list(filter(fn, [line.split(' ') for line in self.lines()]))
+
+    """
+    To tokenize your string simply do .line(str) or .lines(str) which will space-separate the strings then do the identity-cast to strings
+    """
+    def empty(self): # bool, True if stdout with all whitespace stripped is empty
+        return (self.out.strip() == '')
+
+    def raw(self):
+        return self.out
+    def err(self):
+        return self.err
+    def code(self):
+        return self.retcode
+
+    def __len__(self):
+        return len(self.out.split('\n'))
+    def __repr__(self): # TODO make your custom display hook not print SHVals if they have capture_out/err both as None, eg for full line commands.
+        res = 'SHVal('
+        if self.out is not None:
+            res += f"out={self.out},"
+        if self.err is not None:
+            res += f"err={self.err},"
+        res += f"code={self.retcode},"
+        res = res[:-1] # kill the last comma
+        return res + ')'
+
+
+from subprocess import Popen,CompletedProcess
+_prev_shval = SHVal(CompletedProcess(args='',
+                returncode=0,
+                stdout=None,
+                stderr=None),False)
+
+# Note that blank lines and specific ctrl-c related failures (very rare ones only) will not set this previous return code tracker
+def retcode():
+    global _prev_shval
+    return _prev_shval
+
+
+"""
+
+Sometimes we want stdout
+Sometimes we want stderr
+We never want stdin. Stdin will be handled by bash with "|" and such, we dont need to manage any of that at this level
+
+"""
+
+def esrun(*popenargs, debug=u.Debug(False), **kwargs):
+    with Popen(*popenargs, **kwargs) as process:
+        try:
+            debug.print(f"starting communicate()")
+            #stdout, stderr = process.communicate(None)
+            stdout, stderr = escommunicate(process, debug=debug)
+            debug.print(f"ended communicate()")
+        except KeyboardInterrupt:
+            debug.g(f"ended comm by: found keyboard interrupt in child")
+        except:
+            debug.g(f"ended comm by: myrun() is killing a child of {os.getpid()}")
+            process.kill()
+            # We don't call process.wait() as .__exit__ does that for us.
+            raise
+        retcode = process.poll()
+    return CompletedProcess(process.args, retcode, stdout, stderr)
+
+
+def escommunicate(process, debug=u.Debug(False)):
+    try:
+        stdout, stderr = _escommunicate(process, debug=debug)
+    except KeyboardInterrupt:
+        debug.print("keyboard int in escommunicate()")
+    finally:
+        process._communication_started = True # good to set it just in case it's used by someone else
+    return stdout, stderr
+
+
+import selectors
+
+def _escommunicate(self, debug=u.Debug(False)):
+    stdout = None
+    stderr = None
+
+    self._fileobj2output = {}
+    if self.stdout:
+        self._fileobj2output[self.stdout] = []
+    if self.stderr:
+        self._fileobj2output[self.stderr] = []
+
+    if self.stdout:
+        stdout = self._fileobj2output[self.stdout]
+    if self.stderr:
+        stderr = self._fileobj2output[self.stderr]
+
+    with sp._PopenSelector() as selector:
+        if self.stdout:
+            debug.print("registering stdout")
+            selector.register(self.stdout, selectors.EVENT_READ)
+        if self.stderr:
+            debug.print("registering stderr")
+            selector.register(self.stderr, selectors.EVENT_READ)
+
+        while selector.get_map():
+            try:
+                ready = selector.select()
+                # XXX Rewrite these to use non-blocking I/O on the file
+                # objects; they are no longer using C stdio!
+                for key, events in ready:
+                    if key.fileobj in (self.stdout, self.stderr):
+                        data = os.read(key.fd, 32768)
+                        if not data:
+                            selector.unregister(key.fileobj)
+                            key.fileobj.close()
+                        self._fileobj2output[key.fileobj].append(data)
+            except KeyboardInterrupt:
+                pass
+
+    eswait(self, debug=debug)
+
+    # All data exchanged.  Translate lists into strings.
+    if stdout is not None:
+        stdout = b''.join(stdout)
+    if stderr is not None:
+        stderr = b''.join(stderr)
+
+    # Translate newlines, if requested.
+    # This also turns bytes into strings.
+    if self.text_mode:
+        if stdout is not None:
+            stdout = self._translate_newlines(stdout, self.stdout.encoding, self.stdout.errors)
+        if stderr is not None:
+            stderr = self._translate_newlines(stderr, self.stderr.encoding, self.stderr.errors)
+
+    return (stdout, stderr)
+
+
+def eswait(self, debug=u.Debug(False)):
+    debug.print("entering eswait")
+    while self.returncode is None:
+        try:
+            with self._waitpid_lock:
+                if self.returncode is not None:
+                    break  # Another thread waited.
+                (pid, sts) = self._try_wait(0)
+                # Check the pid and loop as waitpid has been known to
+                # return 0 even without WNOHANG in odd situations.
+                # http://bugs.python.org/issue14396.
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+        except KeyboardInterrupt:
+            pass
+    debug.print("exiting eswait")
+
+
+
+"""
+
+some Awk ideas:
+
+we want to print up until $3 exceeds 1000:
+def aux(self,toks):
+    if(toks[3]) > 1000:
+        return HALT
+    return VERBATIM
+Awk(aux)(lines)
+
+oneline:
+Awk('if $3 > 1000: HALT;; VERBATIM')
+Awk('(if $3 > 1000: HALT) VERBATIM') alternate syntax, both should be accepted. it's harder to write this parenthesized version while looking ahead.
+^dollarsign vars
+^HALT and VERBATIM expand to proper return statements
+^ double semicolon to indicate a dedent
+
+
+count the number of lines with 5 tokens:
+def aux(self,toks):
+    if len(toks) == 5:
+        self.count += 1
+Awk(aux).begin(lambda self: self.count=0)(lines).count
+
+Awk('if $NR == 5: count++').count
+^self.count transformation. All locals are extracted to become state variables.
+^ints like self.count are created and initialized to 0
+^The postfix ++ operator was created
+^$NR special variable
+
+
+"""
+
+VERBATIM = object() # just a generic object with a unique id
+HALT = object()
+
+class Awk:
+    def __init__(self, fn):
+        self._step = fn
+        self._begin = lambda self, toks: toks
+        self._end = lambda self, toks: toks
+    def begin(self, fn):
+        self._begin = fn
+    def end(self, fn):
+        self._end = fn
+    def __call__(self, lines):
+        self.out = []
+        self._begin(self)
+        for line in lines:
+            if isinstance(str,line):
+                toks = line.split(' ')
+            else:
+                toks = line
+            res = self._step(self,line)
+            if res is None:
+                continue
+            if res is VERBATIM:
+                self.out.append(line)
+            if res is HALT:
+                break
+            self.out.append(res)
+        self._end(self)
+        return self.out
+
+
+
 
 
     #mode = 'capture' if capture_output else 'nocapture'

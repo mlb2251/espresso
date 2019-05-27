@@ -51,7 +51,7 @@ HISTMAX=1000
 
 def get_arguments():
     parser = argparse.ArgumentParser(description='Espresso programming language')
-    parser.add_argument('infile', nargs='?', default=None, type=argparse.FileType('r'), help='The optional input file')
+    parser.add_argument('infile', nargs='?', default=None, type=str, help='The optional input file')
     parser.add_argument('--debug', action='store_true', default=False,
             help='Enables full debugging from startup (equivalent to running !debug as first command)')
     parser.add_argument('--repl', action='store_true', default=False,
@@ -72,6 +72,8 @@ prelude = [
     "import backend",
     "os.chdir(\""+os.getcwd()+"\")",
     "backend.setup_displayhook()",
+    "argv = sys.argv",
+    "argc = len(argv)",
     ]
 
 # initialize any directories needed
@@ -109,19 +111,18 @@ def do_repl(config):
 
     # alt. could replace this with a 'communicate' code that tells repl to run its full self.code block
     # initialize the repl
-    config.compile = False
     if config.infile is not None:
-        config.compile = True
-        #with open(config.infile,'r') as f:
-        config.lines = config.infile.read().split('\n')
-        config.infile.close()
-    the_repl = repl.Repl(config=config)
+        if not os.path.isfile(config.infile):
+            os.r(f'file {config.infile} not found')
+            exit(1)
+    the_repl = repl.Repl(config)
 
     for line in prelude:
         the_repl.run_code([line])
     the_repl.update_banner()
     print("Boot time: {:.3f}".format(time.time()-_start_time))
     # This is the important core loop!
+    u.y(f'PID: {os.getpid()}')
     while True:
 
         #readline.write_history_file(histfile)
@@ -130,17 +131,17 @@ def do_repl(config):
             line = the_repl.get_input()
             u.reload_modules(verbose=the_repl.verbose_exceptions)
             #print(the_repl.line_idx)
-            the_repl = repl.Repl(repl=the_repl) # updates repl to a new version. This must be done outside of the Repl itself bc otherwise changes to methods won't be included.
+            #the_repl = repl.Repl(repl=the_repl) # updates repl to a new version. This must be done outside of the Repl itself bc otherwise changes to methods won't be included.
             #print(the_repl.line_idx)
             the_repl.next(line)
         except u.VerbatimExc as e:
             print(e)
-            if the_repl.compile:
+            if the_repl.context.compile:
                 sys.exit(1)
         except Exception as e:
             #the program will never crash!!! It catches and prints exceptions and then continues in the while loop!
             print(u.format_exception(e,u.src_path,verbose=the_repl.verbose_exceptions))
-            if the_repl.compile:
+            if the_repl.context.compile:
                 sys.exit(1)
 
 
@@ -155,6 +156,6 @@ def main():
     except Exception as e:
         print(u.format_exception(e,u.src_path,verbose=True))
 
-if __name__ == '__main__':
-    main()
+#if __name__ == '__main__':
+#    main()
 

@@ -102,7 +102,7 @@ class Tok:
         self.data=data          # the contents of the capture group of the Tok's regex, if any.
         self.verbatim=verbatim  # e.g. 'foo'. The verbatim text that the regex matched on
     def __repr__(self):
-        out = self.typ.__repr__()
+        out = str_of_const[self.typ]
         if self.data != '':
             out += '('+ u.mk_y(self.data) + ')'
         return out
@@ -322,6 +322,8 @@ class SNormal(State):
     def post(self,text):
         if self.opener.typ != SOL:
             self.assertpost(self.tok().typ == self.closer.typ)
+        if self.opener.typ == DOLLARPAREN:
+            return '"+str(' + text + ')+"'
         return self.opener.verbatim + text + self.closer.verbatim
 
 
@@ -353,16 +355,18 @@ class SShquote(State):
             return POP
         return VERBATIM
     def post(self,text):
-        return self.opener.verbatim + text + self.closer.verbatim
+        return '\\'+self.opener.verbatim + text + '\\'+self.closer.verbatim
 
 # sh{X
 #    ^
-class SShmode(State):
-    def __init__(self,parent,capture_output=True):
+class SShmode(State): # set capture_output=False to get ":" line mode or capture_output=True to get "sh{}" expression mode
+    def __init__(self,parent,capture_output=True, capture_error=False, exception_on_retcode=None):
         super().__init__(parent)
         self.brace_depth = 1
         self.debug_name = "SShmode"
         self.capture_output = capture_output
+        self.capture_error = capture_error
+        self.exception_on_retcode = exception_on_retcode
     def transition(self,t):
         if t.typ == LBRACE:
             self.brace_depth += 1
@@ -373,12 +377,15 @@ class SShmode(State):
                 return POP
             return VERBATIM
         elif t.typ in [QUOTE1, QUOTE2]:
-            return self.run_next(SQuote(self,t))
+            return self.run_next(SShquote(self,t))
         elif t.typ == DOLLARPAREN:
             return self.run_next(SNormal(self,t))
         return VERBATIM
     def post(self,text):
-        return 'backend.sh("{}",capture_output={})'.format(text,self.capture_output)
+        return 'backend.sh("{}",capture_output={},capture_error={},exception_on_retcode={})'.format(text,
+                self.capture_output,
+                self.capture_error,
+                self.exception_on_retcode)
 
 
 # foo    a b c
@@ -442,12 +449,16 @@ class SInitial(State):
         self.debug_name = "SInitial"
         self.debug = debug
     def transition(self,t):
-        self.halt = True # this is a 1 shot transition function
+        self.halt = True # this is a 1 shot transition function (except in case of WHITESPACE, see below)
         ##This should handle the ">a" syntax and the quick-fn-def syntax, and should do a self.run_same to SNormal if neither case is found
 
         ## and : linestart syntax for sh line
-        if t.typ == COLON:
-            res = self.run_next(SShmode(self,capture_output=False)) ##allow it to kill itself from eol
+
+        if t.typ == WHITESPACE:
+            self.halt = False # briefly allow us to run another step of SInitial
+            return VERBATIM
+        if t.typ == COLON or (t.typ == ID and t.data == 'sh'):
+            res = self.run_next(SShmode(self,capture_output=False,capture_error=False, exception_on_retcode=False)) ##allow it to kill itself from eol
         else:
             res = self.run_same(SNormal(self,Tok(SOL,'','')))
         assert len(self._tstream)==0,'tstream should be empty since SInitial should consume till EOL'

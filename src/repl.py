@@ -11,7 +11,7 @@ import codegen
 import util as u
 
 
-MAGIC = "this is proof that I'm an espresso object"
+#MAGIC = "this is proof that I'm an espresso object"
 
 ###############################
 ###############################
@@ -127,18 +127,59 @@ set_tabcomplete(True)
 readline.set_completer(completer)
 
 
+class Context:
+    def __init__(self, repl, infile): # REPL is infile=None
+        self.prev_context = repl.context
+        self.old_mode = repl.mode
+        self.repl = repl
+        self.infile = infile
+
+        def input_from_file(banner):
+            u.gray(f"input_from_file called")
+            self.line_idx += 1
+            if self.line_idx >= len(self.lines):
+                u.gray(f"Context switch: {self.infile} -> {self.prev_context.infile}")
+                self.repl.context = self.prev_context
+                self.repl.mode = self.old_mode # reset mode as exiting this context. Then again, it'll always be normal mode that calls `use` statements
+                if self.repl.context == None:
+                    u.gray('Final context ended, exit()ing')
+                    exit(0)
+                return self.repl.context.input(banner) # smoothly transition into the next input source
+            line = self.lines[self.line_idx]
+            print(f"compiling:{line}")
+            return line
+
+        if infile is None:
+            self.compile = False
+            repl.mode = 'speedy'
+            self.input = input
+        else:
+            self.compile = True
+            self.line_idx = -1
+            repl.mode = 'normal'
+            self.input = input_from_file
+            try:
+                with open(infile,'r') as f:
+                    self.lines = f.read().split('\n')
+            except:
+                u.r(f"failed to open file {infile} for Context creation")
+                return
+        repl.context = self
+    def input(self):
+        u.r("SHOULD HAVE BEEN OVERWRITTEN") # is overwritten in __init__
 
 
 
 # this is the Repl called from main.py
 # Repl.next() is the fundamental function that gets input, parses it, and runs it
 class Repl:
-    def __init__(self,config=None,repl=None):
-        if repl is not None:
-            self._load(repl)
-            return
+    def __init__(self,config):
+        #if repl is not None:
+            #self._load(repl)
+            #print(f"__init context: {self.context.infile}")
+            #return
 
-        assert config is not None
+        #assert config is not None
         # DEFAULTS
         self.config = config
         self.globs= dict() # globals dict used by exec(). TODO Should actually be initialized to whatever pythons globals() is initialized to
@@ -150,32 +191,38 @@ class Repl:
         self.debug = config.debug #if this is True then parser output is generated. You can toggle it with '!debug'
         self.communicate=[] # for passing messages between main.py and repl.py, for things like hard resets and stuff
         self.verbose_exceptions=False #if this is true then full raw exceptions are printed in addition to the formatted ones
-        self._magic = MAGIC
-        self.compile = self.config.compile # bool
-        if self.compile: # this should only fire during default settings, itll get overwritten by _load which is desired
-            self.lines = self.config.lines
-            self.line_idx = -1 # start one before 0
-            self.mode = 'normal'
+        #self._magic = MAGIC
+        self.context = None
+
+        if config.infile is None or config.repl:
+            self.add_context(None) # add a REPL context if `config.repl` or if `config.infile`
+        if config.infile:
+            self.add_context(config.infile)
 
         #readline.set_completion_display_matches_hook(CustomCompleterDisplayHook(self)) # TODO uncomment
 
-    def _load(self, repl):
-        if hasattr(repl,'_magic') and repl._magic == MAGIC: # necessary due to module reloading
-            d = repl.__dict__
-        elif isinstance(repl,dict):
-            d = repl
-        else:
-            print("[err] unable to load from {} as it is not a dict or Repl object".format(repl))
-            return
-        #for key in self.__dict__.keys(): # only import keys that are in the newest version
-        #    if key in d.keys():
-        #        setattr(self,key,d[key])
-        for key,val in d.items():
-            setattr(self,key,val)
+    def add_context(self,infile): # REPL is infile=None
+        u.gray(f'Adding context: {infile}')
+        Context(self,infile) # this will automatically add itself as our self.context if it succeeds in reading the infile etc
+
+#    def _load(self, repl):
+#        if hasattr(repl,'_magic') and repl._magic == MAGIC: # necessary due to module reloading
+#            d = repl.__dict__
+#        elif isinstance(repl,dict):
+#            d = repl
+#        else:
+#            print("[err] unable to load from {} as it is not a dict or Repl object".format(repl))
+#            return
+#        #for key in self.__dict__.keys(): # only import keys that are in the newest version
+#        #    if key in d.keys():
+#        #        setattr(self,key,d[key])
+#        for key,val in d.items():
+#            setattr(self,key,val)
 
     # updates the state based on communications sent through the list ReplState.communication
 
     def next(self,line):
+        #print(f"next() context: {self.context.infile}")
         if line is None: return
         if len(line.strip()) == 0: return
 
@@ -237,26 +284,26 @@ class Repl:
 
     # prompts user for input and returns the line they enter.
     def get_input(self, multiline = False):
-        if self.compile:
-            self.line_idx += 1
-            if self.line_idx >= len(self.lines):
-                print("finished running script")
-                if self.config.repl:
-                    self.compile = False
-                    return self.get_input() # redo getting input, in repl mode this time
-                sys.exit(0)
-            line = self.lines[self.line_idx]
-            print(f"compiling: {line}")
-            return line
+        u.b(f'{os.getpid()}: entering get_input()')
+        #print(f"get_input() context: {self.context.infile}")
 
-        # repl (non compiled)
         if self.banner_cwd != os.getcwd(): self.update_banner()
         try:
-            set_tabcomplete(True) # just put this here in case it gets set to False by multiline then somehow the interpreter drops out intoj
-            if not multiline:
-                line = input(self.banner)
-            else:
-                line = input(u.mk_g(' '*(self.banner_uncoloredlen-1)+'|'))
+            while True:
+                #print(f"get_input() loop context: {self.context.infile}")
+                set_tabcomplete(True) # just put this here in case it gets set to False by multiline then somehow the interpreter drops out intoj
+                if not multiline:
+                    line = self.context.input(self.banner)
+                else:
+                    line = self.context.input(u.mk_g(' '*(self.banner_uncoloredlen-1)+'|'))
+
+                if multiline and line == '': # empty line is useful to know about for multiline.
+                    break
+                if not multiline and line.strip() == '':
+                    continue # ignore and ask for another line
+                if line.strip()[0] == '#':
+                    continue # ignore and ask for another line
+                break
 
         except KeyboardInterrupt: # ctrl-c lets you swap modes quickly
             if readline.get_line_buffer().strip() == '':
@@ -266,11 +313,14 @@ class Repl:
                     self.mode = 'speedy'
                 self.update_banner()
             print('')
+            u.y(f'CTRL-C PID: {os.getpid()}')
+            u.b(f'{os.getpid()}: exiting get_input()')
             return
         except EOFError: # exit with ctrl-d
             print('\n[wrote history]')
             readline.write_history_file(u.histfile)
             sys.exit(0)
+        u.b(f'{os.getpid()}: exiting get_input()')
         return line
 
 # takes a line of input and generates a list of lines of final python code using codegen.parse()
@@ -283,7 +333,7 @@ class Repl:
             while True:
                 line = self.get_input(multiline=True)
                 if line.strip() == '': break    # ultra simple logic! No need to keep track of dedents/indents
-                if self.compile and line[0] == line.strip()[0]: # checks if indent level is 0
+                if self.context.compile and line[0] == line.strip()[0]: # checks if indent level is 0
                     self.line_idx -= 1 # it's rewind time. Here we just take a change to indent level 0 as the end of the multiline block, then we rewind to when getline gets called again it'll deal with that line that had indent=0. The reason we dont lump this line into `lines` is bc lines should only hold a single interpreter statement since ast.parse or compile or whatever is called in 'single' mode.
                     break
 
@@ -302,6 +352,16 @@ class Repl:
             #f.write('\n'.join(self.code))
         codestring = '\n'.join(new_code)
         u.b(codestring)
+
+        # `use` statements
+        if codestring.strip()[:4] == 'use ':
+            assert codestring[:4] == 'use ', "`use` statements can only be used at indentation level 0"
+            items = codestring.strip().split(' ')
+            assert len(items) == 2, "`use` syntax is: `use IDENTIFIER` where the identifier is a filename WITHOUT '.py' included and that file is in the current directory. These limitations will be relaxed in the future."
+            filename = items[1] + '.py'
+            self.add_context(filename)
+            return
+
         try:
             # Note that this can only take one Interactive line at a time (which may
             # actually be a multiline for loop etc).
@@ -310,22 +370,25 @@ class Repl:
             # earlier version, look back thru the git repository if you need it. However
             # really you should be able to just divide up your input and call run_code multiple
             # times with the pieces.
+            """
+             "Remember that at module level, globals and locals are the same dictionary. If exec gets two separate objects as globals and locals, the code will be executed as if it were embedded in a class definition."
+            """
             as_ast = ast.parse(codestring,mode='single') # parse into a python ast object
             as_ast = ast.fix_missing_locations(as_ast)
             code = compile(as_ast,'<ast>','single')
-            exec(code,self.globs) #passing locals in causes it to only update locals and not globals, when really we just want globals to be updated
+            exec(code,self.globs) #passing locals in causes it to only update locals and not globals, when really we just want globals to be updated. Confirmed by looking at the `code` module (pythons interactive interpreter emulator) that this is valid (tho they name the thing they pass in locals not globals).
             #print(ast.dump(as_ast))
             self.code += new_code # keep track of successfully executed code
         except u.VerbatimExc as e:
             print(e)
-            if self.compile:
+            if self.context.compile:
                 sys.exit(1)
         except Exception as e:
             # This is where exceptions for the code go.
             # TODO make em look nicer by telling format_exception this is the special case of a repl error thrown by exec() or eval()
             # (for this you may wanna have ast.parse() in a separate try-except to differentiate. It'll catch syntax errors specifically.
             print(u.format_exception(e,['<string>',u.src_path],verbose=self.verbose_exceptions))
-            if self.compile:
+            if self.context.compile:
                 sys.exit(1)
 
 
