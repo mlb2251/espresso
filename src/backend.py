@@ -85,6 +85,49 @@ Q: should sh run .split()? should it trip trailing newlines? If it splits and en
 
 """
 
+"""
+
+Note on how subprocess module work along the run() path:
+
+run()
+    try/except: communicate()
+    ...except KeyboardInterrupt causes comm() to exit but we don't want this.
+
+
+communicate()
+    _communication_started is just a flag to prevent communicating twice to same popen object in diff threads probably
+    calls try: _communicate()
+    except: calls _wait() which just waits for self to complete by calling _try_wait() which calls os.waitpid()
+
+_communicate():
+    basically does select() a bunch using SelectSelector or PollSelector from the `selectors` library.
+        -It uses .register() to register a (fd,WRITE) or (fd,READ) events for stdin and/or stdout and/or stderr.
+        It uses `while selector.get_map()` which I believe will be false when get_map returns an empty map which means all registered events (reads/writes on file descriptors) have already happened.
+        `ready = selector.select(timeout)` is used to grap the list of events that have happened. So like (stderr,WRITE) might be an event.
+        If stderr/out is ready to be read then `os.read(key.fd, 32768)` is called to read it (32768 is just a large number). The result of this read gets .append()ed to the local variable `stdout` or `stderr` (via the alias _fileobj2output)
+        **note that events can fire repeatedly until the pipe is closed by EOF or something like that. So you can read() 10 bytes if thats all that is ready, then a few seconds later another 20 bytes might be ready so you can read() that -- it's not like unix select() which resets the bitmap every time.
+        **Also note that stdin will be marked as ready as soon as the child process tries to read from it, so at that point all of the `input` string will be sent over to the child. (it is sent in chunks if it's large).
+    Once all that select stuff is done we do `self.wait()` to wait for ourselves to terminate. This waiting is only done after stdout and stderr have been closed by the child.
+    Finally we convert our lists of stdout/err into strings with ''.join().
+    If text_mode is specified, self._translate_newlines is used on stdout and stderr
+    return stdout,stderr
+
+__init__ for Popen:
+    Setting up stdin/out/err:
+        creates file descriptors p2cread, p2cwrite, c2pread, c2pwrite, errread, errwrite by calling self._get_handles(stdin, stdout, stderr) where stdin/stdout/stderr could each be None, in which case the file descriptor returned is -1. If for example `stdout` is `sp.PIPE` then `c2pread, c2pwrite = os.pipe()` is done.
+            So basically "c2p" means stdout (child to parent)
+        Then `self.stdout = io.open(c2pread, 'rb', bufsize)` is done in __init__  (if c2pread is not -1) to open the reading end of the child-to-parent communication (ie stdout). self.stderr and self.stdin are handled similarly.
+        self.stdout/err/in default to None
+    Finally _execute_child() is called to actually launch the process
+
+_execute_child():
+    spends a while setting up errpipe_write/read to communicate exec() failure from child to parent.
+    calls _posixsubprocess.fork_exec() which is a C function that basically just forks, closes the appropriate ends of all the pipes on the child side, and calls exec(). It's pretty long and probably not very worth reading.
+    closes the appropriate ends of the pipes on the parent side.
+
+
+"""
+
 
 def sh(s, capture_output=True, capture_error=False, exception_on_retcode=None):
     debug = u.Debug(False)
@@ -168,11 +211,11 @@ class SHVal:
         ret = [casters[i](ret[i]) for i in range(len(ret))]
         return ret
 
-    def item(self, caster=str): # coerce into single word
+    def item(self, caster=str): # coerce into single token
         ret = self.out.strip()
         if ret.count(' ') == ret.count('\n') == 0:
             return caster(ret)
-        raise ValueError(f".item() was called with more than just a single word of output:{self.out}")
+        raise ValueError(f".item() was called with more than just a single token of output:{self.out}")
 
     """
     Note that if `length` `casters` or `rest` are specified then lines are returned as a list of lists (lines outer list, tokens inner list)
