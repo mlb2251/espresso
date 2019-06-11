@@ -46,6 +46,8 @@ def module_ls():
     files = os.listdir(src_path)
     files = list(filter(lambda x:x[-3:]=='.py',files)) # only py files
     mod_names = [x[:-3] for x in files] # cut off extension
+    if 'codegen' in mod_names: # reloading it messes up some state variables in atomize() and such
+        mod_names.remove('codegen')
     return mod_names
 
 # takes the result of sys.modules as an argument

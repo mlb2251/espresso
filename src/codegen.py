@@ -24,11 +24,15 @@ class TokTyp(Enum):
     # IMPORTANT: order determines precedence. Higher will be favored in match
     #MACROHEAD = re.compile(r'%(\w+\??)')
     WHITESPACE= re.compile(r'(\s+)') ##note you can never have multiple whitespaces in a row!
+    DOLLARPAREN = re.compile(r'\$\(')
+    DOLLARVAR = re.compile(r'\$(\w+)')
+    ID      = re.compile(r'([a-zA-z_]\w*)')
+    INTEGER    = re.compile(r'(\d+)')
+    PERIOD     = re.compile(r'\.')
     COMMA     = re.compile(r',')
     COLON     = re.compile(r':')
     EXCLAM     = re.compile(r'!')
     FLAG     = re.compile(r'-(\w+)')
-    PERIOD     = re.compile(r'\.')
     EQ     = re.compile(r'=')
     SH_LBRACE     = re.compile(r'sh{')
     SH_LINESTART     = re.compile(r'sh\s+')
@@ -43,10 +47,7 @@ class TokTyp(Enum):
     QUOTE2    = re.compile(r'\"')
     QUOTE1    = re.compile(r'\'')
     DOLLARESC = re.compile(r'\$\$')
-    DOLLARPAREN = re.compile(r'\$\(')
-    DOLLARVAR = re.compile(r'\$(\w+)')
-    ID      = re.compile(r'([a-zA-z_]\w*)')
-    INTEGER    = re.compile(r'(\d+)')
+    PIPE    = re.compile(r'|')
     UNKNOWN   = re.compile(r'(.)')
     SOL = 0 # should never be matched against since 'UNKOWN' is a catch-all
     EOL = 1 # should never be matched against since 'UNKOWN' is a catch-all
@@ -211,18 +212,19 @@ class State:
                 self.d.print("EOL autopop from run()")
                 break # autopop on EOL
 
-            tmp_str = "{}.transition('{}')".format(self.debug_name,self.tok().verbatim)
-            self.d.y(tmp_str)
+            _initial_str = f"{self.debug_name}.transition('{self.tok().verbatim}')"
+            self.d.y(_initial_str)
             res = self.transition(self.tok())
             assert res is not None, 'for clarity we dont allow transition() to return None. It must return '' or NONE (the global constant) for no extension)'
-            tmp_res = res
+
+            _final_str = res
             if res == VERBATIM:
-                tmp_res = self.tok().verbatim
+                _final_str = self.tok().verbatim
             elif res == NONE:
-                tmp_res = '[none]'
+                _final_str = '[none]'
             elif res == POP:
-                tmp_res = 'POP'
-            self.d.y("{} -> '{}'".format(tmp_str,tmp_res))
+                _final_str = 'POP'
+            self.d.y(f"{_initial_str} -> '{_final_str}'")
 
             if isinstance(res,str): # extend text
                 text += res
@@ -237,19 +239,19 @@ class State:
             if self.halt: # no step on pop
                 break
             self.step()
-        self.d.p("before postproc: "+text)
+        self.d.p(f"before postproc: {text}")
         out = self.post(text)
-        self.d.b("{}:{}".format(self.debug_name,out))
+        self.d.b(f"{self.debug_name}:{out}")
         return out
     def pre(self): # default implementation
         pass
     def post(self,text): # default implementation
         return text
     def run_same(self,state):
-        return state.run() # will always return -1
+        return state.run()
     def run_next(self,state):
         self._tstream.step()
-        return state.run() # will always return -1
+        return state.run()
     def pop(self,value):
         self.popped = True
         return value
