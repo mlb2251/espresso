@@ -47,7 +47,7 @@ class TokTyp(Enum):
     QUOTE2    = re.compile(r'\"')
     QUOTE1    = re.compile(r'\'')
     DOLLARESC = re.compile(r'\$\$')
-    PIPE    = re.compile(r'|')
+    PIPE    = re.compile(r'\|')
     UNKNOWN   = re.compile(r'(.)')
     SOL = 0 # should never be matched against since 'UNKOWN' is a catch-all
     EOL = 1 # should never be matched against since 'UNKOWN' is a catch-all

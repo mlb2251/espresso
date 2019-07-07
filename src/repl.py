@@ -284,7 +284,6 @@ class Repl:
 
     # prompts user for input and returns the line they enter.
     def get_input(self, multiline = False):
-        u.b(f'{os.getpid()}: entering get_input()')
         #print(f"get_input() context: {self.context.infile}")
 
         if self.banner_cwd != os.getcwd(): self.update_banner()
@@ -313,14 +312,14 @@ class Repl:
                     self.mode = 'speedy'
                 self.update_banner()
             print('')
-            u.y(f'CTRL-C PID: {os.getpid()}')
-            u.b(f'{os.getpid()}: exiting get_input()')
+            #u.y(f'CTRL-C PID: {os.getpid()}')
+            #u.b(f'{os.getpid()}: exiting get_input()')
             return
         except EOFError: # exit with ctrl-d
             print('\n[wrote history]')
             readline.write_history_file(u.histfile)
             sys.exit(0)
-        u.b(f'{os.getpid()}: exiting get_input()')
+        #u.b(f'{os.getpid()}: exiting get_input()')
         return line
 
 # takes a line of input and generates a list of lines of final python code using codegen.parse()

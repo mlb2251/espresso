@@ -9,11 +9,522 @@ from keyword import kwlist
 keywords = set(kwlist)
 
 
+"""
+
+TODO
+-`Not` shd not be in UnopL bc of precedence
+-comp_for needs internal recursion as in LRM bc its used in generators too so unless you wanna track dependencies you gotta go verbatim
+-add the blank-to-None conversion for special cases like return stmts
+-add autoinserted return None stmt at the end
+-make build(p,leftnode) to format
+-write tok_of_tok_like() -- should be easy just use .data
+-currently precedence_table is opp order of trunk
+-removing GATHER i guess?
+-Improve Lit parsing to cover all cases
+-Imporve Var parsing to cover all cases
+-.assert_empty() instead of .assert_empty()
+-ensure all super().__init__() calls are done
+-ensure `p` not `elems` everywhere
+-replace keyword_arg() with KVPair stuff
+
+
+
+
+Notes on performance with throwing/catching exceptions:
+    If you race a simple function that returns "text" vs one that raises SyntaxError("text") the simple function will be 4x faster, but the error raising one will still execute 1e7 times in about 4 seconds. As soon as any complexity is added to the function I believe the gap closes pretty quickly as well. And if there are recursive calls and the exception pops through them all it only is about 2x slower than the simple function (for depth of 8).
+    TLDR yeah throwing/catching exceptions is slower but this whole return speed thing probably isn't the bottleneck in the program so its well worth the amazing benefits it brings.
+
+"""
+
+
+# TODO the next thing to do is get target, target_list, and starred expressions down really well in terms of what they mean and parsing, because they're super important.
+# TODO furthermore the idea of hierarchy seems good. I've been doing this linear left_recursive expansion method which is GOOD but perhaps one thing you can do is rework that to be a series of or_expr() and_expr() calls etc? Like literally follow the language model? Where or_expr can be anything below a bitwise `|`, etc. Or perhaps make expr take a keyword that's literally 'target' or 'or_expr'. Then make sure it composes with multiple targets ofc.
+    ## it would be overkill to have anything below or_expr(). You should have or_expr, or_test, conditional_expression, expression, expression_list, expression_nocond, starred_expression(==starred_list), [target, target_list == not expressions but still imp]. No need for lambdas separate from expression[_nocond]. We're only writing these for exprs that are reused in other places.
+    ## note that an expression_list
+
+"""
+
+token(tok) - consume a token if it matches and ret bool indicating success
+keyword(kw) - consume a keyword if it matches and ret bool indicating success
+identifier() - consume an ID and return its str on success or None on failure
+empty() - ret bool indicating if self.idx is pointing beyond the end of self.elems
+or_expr/or_test/target/target_list/etc - consume tokens and return AST node. Raise SyntaxError on failure.
+p.must.fn() - assert that a fn like token/keyword/empty/etc did not return None or False. Very important.
+p.or_none.fn() - Try to run a fn that might raise a SyntaxError and return normal results if no exceptions are raised but return None if SyntaxError is raised. This also will reset the token stream to wherever the call started on failure.
+
+or_expr - this is a bitor/bitxor/bitand/shift/a/m/u/power_expr in that order
+
+
+GRAMMAR RULES
+1. `a ::= (b | c) d` requires parse(b) will fail iff parse(c) will succeed. IE exactly one RHS will parse successfully.
+2. `a ::= (b | c) d` requires at most ONE of b,c to be in the expression trunk. Ie if one is expression the other cant be or_test. This is because expression is everything or_test can be and more.
+3. All non-trunk expressions must be identifiable with k-lookahead
+    If this were not true one could use `p.can` to parse them anyways, but also that probably indicates poor language design.
+4. If a,b are trunk expressions and `a` is more expressive than `b` (ie `a` is after `b` in the trunk list) then no `b ::=` production rules can contain `a` directly. Note that a `b` rule can contain a third element `c` which then yields `a` but it can't directly contain `a` itself. An important note is that the element `c` must yield a Node -- something like .comp_iter is merely a grammar feature and for all intents and purposes we substitute its definition into its location in the BNF rules. So if something like comp_iter or any other rule started with `a` that would be invalid unless the rule itself yields an expression node.
+Combining 2 and 3 we can say that at each decision point in the parsing process we can either determine via lookahead (often a single token) what non-trunk expression we have, and then if all lookaheads fail we can try the potential trunk expression and if that fails then we fail.
+
+Stmts are lookahead identifiable other than ExprStmt, Asn, AugAsn are very slightly more complex.
+
+
+
+
+
+
+*** writing out hierarchical DAG or tree for expressions.
+
+stmtexpres require an intermed vairable, is that ok? is that right? Yes i think that is right, bc why would you ever wanna modify the result you could have just done that in ur final expr line! tho maybe w matches idkkkk. The issue w matches is the should be expressions by nature.
+^^Yeah matches shd rly be expressions.
+
+
+y = (match type(x) with |int->1 |bool->2)
+y = (match type(x) with
+    |int->1
+    |bool->2)
+
+y ::=
+    op ::=
+        match x with
+            |3 -> x
+            |_ -> x
+    op+5
+
+collapsing the header of a stmt onto the ::= line is allowed:
+y ::=
+    op ::= match x with:
+        |3 -> x
+        |_ -> x
+    op+5
+
+y ::=
+    x = 3
+    y = 2+x
+    y
+
+---
+def aux():
+    x=3
+    y=2+x
+    return y
+y = aux()
+---
+
+y ::= x=3;y=2+x;y
+---
+def aux(): x=3;y=2+x;return y
+y = aux()
+---
+
+"""
+
+def locate(fn):
+    """
+    Decorator where if a function that takes a Parser as the first argument and returns a Node it'll tag that node with the Pos tags from the first and last tokens parsed
+    """
+    def wrapper(p,*args,**kwargs):
+        assert isinstance(p,Parser)
+        start_i = p.idx
+        ret = fn(p,*args,**kwargs)
+        end_i = p.idx-1
+        start = p.elems[start_i].loc.start
+        end = p.elems[end_i].loc.end
+        if isinstance(ret,Node):
+            ret.loc = Pos(start,end)
+        return ret
+    return wrapper
+
+class Parser():
+    def __init__(self,elems):
+        self.elems = elems # list of Tokens/Atoms
+        self.idx = 0
+        #self.bool = BoolCallWrapper(self)
+        #self.silent = SilentCallWrapper(self)
+        #self.fail = FailCallWrapper(self)
+        self.must = AssertCallWrapper(self)
+        self.or_none = OptionalCallWrapper(self,None) # or_none is most encouraged
+        self.or_fail = OptionalCallWrapper(self,FAIL)
+        self.or_false = OptionalCallWrapper(self,False)
+        self.or_ = (lambda retval: OptionalCallWrapper(self,retval))
+        self.peek = PeekCallWrapper(self)
+    def next(self):
+        if self.idx >= len(self.elems):
+            raise SyntaxError("Calling next() when already passed the last elem")
+        self.idx += 1
+        return
+    ## FUNDAMENTALS
+    @property
+    def tok(self):
+        if self.idx >= len(self.elems):
+            raise SyntaxError("Ran out of elems to consume")
+        return self.elems[self.idx]
+    def token(self,tok_like):
+        """
+        Return True if curr tok is `tok_like`, else raise SyntaxError
+        Note that `True` is just returned so it can be used with .or_none
+        Step forward on success
+        `tok_like` can be:
+            str: for example '(' becomes RPAREN
+            CONSTANT: like RPAREN
+            list: a list of strs/CONSTANTs, and if any of them matches it succeeds. BINOPS is an example list.
+        """
+        tok = tok_of_tok_like(tok_like)
+        if self.tok.typ == tok:
+            self.next()
+            return True
+        raise SyntaxError(f"Failed to match token. Wanted: {tok} Got: {self.tok}")
+    def keyword(self,kw):
+        """
+        Return True if next token is the keyword `kw` (str), else raise SyntaxError
+        Step forward on success
+        ///////Returns bool indicating if next token is the keyword `kw` (str). Step forward on success.
+        """
+        if self.tok.typ is KEYWORD and self.tok.data == kw:
+            self.next()
+            return True
+        raise SyntaxError(f"Failed to match keyword. Wanted: {kw} Got: {self.tok}")
+    def identifier(self):
+        """
+        Checks if curr tok is an identifier if so step forward and return identifier string, if not raise SyntaxError
+        """
+        if self.tok.typ is ID:
+            self.next()
+            return self.tok.data
+        raise SyntaxError(f"Failed to get an identifier. Got: {self.tok}")
+    def empty(self):
+        """
+        Bool indicating if reached end of token stream
+        """
+        return len(self.idx) >= len(self.elems)
+    def assert_empty(self):
+        if not self.empty():
+            raise SyntaxError
+    ## CONTEXT MANAGERS
+    @contextmanager
+    def peek(self):
+        """
+        contextmanager that rewinds token stream to wherever it started
+        """
+        idx = self.idx
+        try:
+            yield None
+        finally:
+            self.idx = idx
+    @contextmanager
+    def attempt(self):
+        """
+        contextmanager that rewinds token stream to wherever it started only if a SyntaxError is raised
+        """
+        idx = self.idx
+        try:
+            yield None
+        except SyntaxError:
+            self.idx = idx
+    ## BNF TYPES
+    def parameter_list(self,no_annotations=False):
+        pass
+    def expression_list(self):
+        return p.comma_list(p.expression)
+    def expression_nocond():
+        def lambda_expr():
+            return self.identify_build_node(Lambda,nocond=True)
+        return self.logical_or(lambda_expr,or_test)
+    def expression(self):
+        return self.trunk_expr('expression')
+    def or_expr(self):
+        return self.trunk_expr('or_expr')
+    def or_test(self):
+        return self.trunk_expr('or_test')
+    def primary(self):
+        return self.trunk_expr('primary')
+    def starred_expression(self):
+        def starred():
+            self.token('*')
+            return Starred(self.or_expr())
+        def unstarred():
+            return self.expression()
+        return comma_list(starred,unstarred)
+
+    def starred_list(self):
+        return self.starred_expression()
+    def comp_for():
+        is_async = self.or_false.keyword('async')
+        self.keyword('for')
+        targets = self.target_list()
+        self.keyword('in')
+        iter = self.or_test()
+        comp_iter = self.or_none.comp_iter()
+        return CompFor(targets,iter,comp_iter)
+    def comp_if(self):
+        self.keyword('if')
+        cond = self.expression_nocond()
+        comp_iter = self.or_none.comp_iter()
+        return CompIf(cond,comp_iter)
+    def comp_iter(self):
+        return self.logical_or(self.comp_for,self.comp_if)
+    def target(self):
+        """
+        | "(" [target_list] ")"
+        | "[" [target_list] "]"
+        | "*" target
+        | identifier
+        | attributeref
+        | subscription
+        | slicing
+        """
+        def parens_or_brackets():
+            # try parens or brackets
+            self.or_none.parens()
+            contents = self.logical_or(self.parens,self.brackets)
+            targets = contents.or_none.target_list()
+            contents.assert_empty()
+            return targets # success with parens or brackets means return a target_list (or None)
+
+        # star case
+        def starred():
+            self.token('*')
+            return Starred(self.target())
+
+        # only possible remaining case is id/attr/subscript/slice
+        def primary_subtype():
+            e = self.primary()
+            if e not in [Var,Attr,Subscript,Slice]:
+                raise SyntaxError()
+            return e
+
+        return self.logical_or(parens_or_brackets,starred,primary_subtype)
+
+    def parens(p):
+        if not isinstance(p.tok,AParen):
+            raise SyntaxError("Attempting to parse parens when none found")
+        return Parser(p.tok.body)
+    def quote(p):
+        if not isinstance(p.tok,AQuote):
+            raise SyntaxError("Attempting to parse quotes when none found")
+        return Parser(p.tok.body)
+    def brackets(p):
+        if not isinstance(p.tok,ABracket):
+            raise SyntaxError("Attempting to parse brackets when none found")
+        return Parser(p.tok.body)
+    def brackets(p):
+        if not isinstance(p.tok,ABrace):
+            raise SyntaxError("Attempting to parse braces when none found")
+        return Parser(p.tok.body)
+    def target_list(p):
+        return p.comma_list(p.target)
+    ## META FNS
+    def logical_or(self,*option_fns):
+        for fn in option_fns: # try each fn
+            with self.maybe():
+                return fn()
+        raise SyntaxError
+    def comma_list(self,*option_fns):
+        results = []
+        at_least_one = False
+        while True:
+            success = False
+            with self.maybe():
+                res = self.logical_or(*option_fns)
+                results.append(res)
+                at_least_one = True
+                success = True
+            if not success:
+                break # end when all fns fail to parse
+            if not self.or_false.token(','):
+                # no comma at end means break. Trailing comma will be handled by `if not success`. Note that running out of elems will end up causing a SyntaxError so it works out well
+                break
+        if not at_least_one:
+            raise SyntaxError
+        return results
+    ## BUILDING AND IDENTIFYING ODES
+    def build_node(self,nodeclass,leftnode=None,**kwargs):
+        if nodeclass.left_recursive:
+            return nodeclass.build(self,leftnode=leftnode,**kwargs)
+        assert leftnode is None
+        return nodeclass.build(self)
+    def identify_node(self,nodeclass):
+        with self.peek():
+            cls = nodeclass.identify(self)
+        return cls
+    def identify_build_node(self,nodeclass,leftnode=None,**kwargs):
+        """
+        identify() and build() with syntax errors on either step on failure
+        """
+        with self.peek():
+            cls = nodeclass.identify(self)
+        if cls is None:
+            raise SyntaxError
+        if cls.left_recursive:
+            return cls.build(self,leftnode=leftnode,**kwargs)
+        assert leftnode is None
+        return cls.build(self,**kwargs)
+    def trunk_expr(self, type, *, leftnodeclass=None):
+        """
+        Parse an expression that lies at expression type `type` (e.g. 'or_test') along the expr trunk.
+
+        In stage 1 we generate the leftmost subexpression, and in stage 2 we repeatedly expand it by left-recursive expansion.
+        Stage 1 must yield a node that's valid for `type` as implied by Grammar Rule 4, and likewise each recursive expansion must yield a node that's valid for `type` (also Grammar Rule 4). I do not believe this will seriously limit our grammar, rather it's part of what it means to be in the `trunk`. Note that of course Nodes created by trunk_expr can internally call trunk_expr with more expressive types.
+        """
+        nodeclasses = get_trunk_nodes(type)
+
+        identified = []
+        for nodeclass in nodeclasses:
+            if not nodeclass.left_recursive:
+                cls = self.identify(nodeclass)
+                if cls is not None:
+                    identified.append(cls)
+
+        if len(identified) > 1:
+            """if multiple appear to conflict we just go down both paths and throw out whichever one yields an Error. If neither yields an Error then we raise an Error. This could happen (in a recoverable way) if two language extensions were written by different people and had different syntax but similar enough syntax that the .identify test passed (e.g. they wrote same fairly minimal .identify function). We should probably also Warn people even when this does pass fine."""
+            raise NotImplementedError(f"{identified}\n{self}")
+
+        # Parens: If we see parens at the start of an expr that just means the leftmost subexpr must be the result of expr_assert_empty on the paren contents
+#        if isinstance(elems[0],AParen):
+#            # (1==1)==1 is not same as 1==1==1
+#            # (a,),b is not same as a,b so we need to be careful abt this stuff esp in conjunction for the build() methods of Tuple and Compare
+#            assert len(identified) == 0
+#            node = expr_assert_empty(elems[0].body) # most keywords dont wanna be passed in here
+#            elems = elems[1:]
+        elif len(identified) == 0:
+            raise SyntaxError(f"No valid leftmost subexpression found for {self}")
+
+        nodeclass = identified[0]
+        print(f"identified node class {nodeclass} for parser: {self}")
+        node = self.build_node(nodeclass)
+        print(f"built node {node}\nremaining parser:{self}")
+
+        # left-recursion to extend this lefthand expression as much as possible
+        while True:
+            if self.empty():
+                break
+            identified = []
+            for nodeclass in nodeclasses:
+                if nodeclass.left_recursive:
+                    cls = self.identify_node(nodeclass)
+                    if cls is not None:
+                        identified.append(cls)
+            if len(identified) == 0:
+                break # end of expansion
+            if len(identified) > 1:
+                raise NotImplementedError(f"{identified}\n{self}") # Same issue as above
+
+            rightnodeclass = identified[0]
+            prec = precedence(leftnodeclass,rightnodeclass)
+            if prec is LEFT or prec is EQUAL:
+                """left op is more tight so we return into our caller as a completed subexpr. Our caller will very quickly be finding this rightnodeclass again (unless kwargs somehow change things ofc)
+                all/most left recursive grammars associate such that the thing on the left binds more tightly so EQUAL precedence behaves like LEFT"""
+                break
+#            if prec is GATHER:
+#                # TODO rn gather is jank but it works. It's fine for now, bigger fish to fry.
+#                node._gather = True
+#                return node,elems
+            # prec is RIGHT
+            print(f"identified (left-recursive) node class {nodeclass} for elems: {self}")
+            node = self.build_node(rightnodeclass,leftnode=node) # build a larger left-recursive expr `node` from our original subexpr `node`
+            print(f"built (left-recursive) node {node}\nremaining elems:{self}")
+
+        return node
+
+class PeekCallWrapper:
+    """
+    Return normal result and reset the tokenstream to where it was at the start of the call.
+    """
+    def __init__(self,parser):
+        self.parser = parser
+    def __getattr__(self,key):
+        fn = getattr(self.parser,key)
+        def wrapper(*args,**kwargs):
+            idx = self.parser.idx
+            ret = fn(*args,**kwargs)
+            self.parser.idx = idx
+            return ret
+        return wrapper
+
+class OptionalCallWrapper:
+    """
+    Return normal result if success, return FAIL if failure and reset the tokenstream to where it was at the start of the call.
+    """
+    def __init__(self,parser,retval):
+        self.parser = parser
+        self.retval = retval
+    def __getattr__(self,key):
+        fn = getattr(self.parser,key)
+        def wrapper(*args,**kwargs):
+            idx = self.parser.idx
+            try:
+                return fn(*args,**kwargs)
+            except SyntaxError:
+                self.parser.idx = idx
+                return self.retval
+        return wrapper
+
+class AssertCallWrapper:
+    """
+    Assert that return value is not False and is not None
+    """
+    def __init__(self,parser):
+        self.parser = parser
+    def __getattr__(self,key):
+        fn = getattr(self.parser,key)
+        def wrapper(*args,**kwargs):
+            idx = self.parser.idx
+            ret = fn(*args,**kwargs)
+            if ret is None or ret is False:
+                raise SyntaxError("`.must` wrapper fired")
+            return ret
+        return wrapper
+
+
+"""
+
+
+
+
+"""
+
+
+
+"""
+LRM / official grammar notes:
+expression_nocond is the same as expression except it can't be a Ternary expression.
+Note that *_nocond is only really used when embedded in some grammar that has an "if" following an expression, like in comprehensions. Thus *nocond only really exists to simplify stuff
+
+
+
+
+primary ::=  atom | attributeref | subscription | slicing | call
+or_expr: The weakest of the numerical expressions (BitOr), anything past this can yield booleans. Any expr with an `|` or tighter as the weakest thing. Note this is a `|` not an `or`. Parent of bitxor/bitand/shift/a/m/u/power_expr (in that order. u=unary, a='+' m='*'). Note that this is maybe the highest overridable operation? Which is prob why it's used in starred_expression?
+comparison: Any expr with a CMPOP or tighter as the weakest thing. or_exprs are the weakest thing that comparisons beat.
+or_test: Any expr with an "or" or tighter as the weakest thing. Parent of and/not/comparison in that order.
+conditional_expression(==Ternary): Ternary--. Direct parent of or_test.
+expression: Lambda | Ternary--
+expression_list: [expression--]+
+starred_list==starred_expression: [expression-- | "*" or_expr--]+
+
+So basically a starred_list==starred_expression== the top of the hierarchy (aside from stuff like [] brackets and such) and can be either an expression-- (==Lambda | Ternary--) or a starred or_expr--. Note that or_expr is the weakest "numerical" thing, anything above that gets into booleans.
+
+
+
+
+
+Basically _nocond versions have no Ternary so they're or_test-- and the same applies to lambda bodies within them:
+    >expression_nocond: or_test-- or lambda but the lambda body is also stuck with or_test--.
+    >lambda_expr: "lambda" [parameter_list] ":" expression
+    >lambda_expr_nocond: "lambda" [parameter_list] ":" (or_test-- | lambda_expr_nocond)
+
+
+
+
+
+
+await_expr ::= "await" primary
+
+
+"""
+
+
 
 # ===TODO===
 ## WHERE I LEFT OFF
-# Continue at implementing `Subscript` and `Slice`, then implement the rest of the Expr nodes.
-# Precedence table. Note that the ',' precedence should avoid issue of tuple recursion
+# Implement the rest of the Expr nodes
 # Rewrite stmt() to loop over a list of Nodeclasses similar to how expr does, except it's much easier bc you can use the __init functions rather than .build. Just make Stmt have a .identify, 
 # You'll need to write token() keyword() etc etc. Since they have v similar input types (str or token constant, list or single elem, fail=..., you should share a lot of their similarities in helper methods (prefix with _ underscore since shouldnt be called outside token/keyword/etc)
 # That's pretty much it i think, then you just gotta get it to compile. Do a first pass thru with ALE to check for common errors that might be inside if-statements and wont show up right away when running.
@@ -506,223 +1017,70 @@ def gathers(*gatherable_classes):
     return aux
 
 class Expr(Node):
-    left_recursive = False
-    gathers = lambda x: False
+    left_recursive = False # gets set to True by @left_recursive decorator
 
     @staticmethod
-    def identify(elems):
+    def identify(p):
         """
-        Takes [elem] and returns True if
+        Takes a Parser and returns a class
         """
         raise NotImplementedError
     @staticmethod
-    def build(elems): # left-recursive nodes take an additional parameter lhs_node
+    def build(elems): # left-recursive nodes take an additional parameter leftnode
         raise NotImplementedError
-    @staticmethod
-    def finish(**finish_kwargs):
-        pass
-#    @staticmethod
-#    def targetable():
-#        raise NotImplementedError
 
+# an Expr with no build/identify functions
+class InitExpr(Expr): pass
+# an Expr which never shows up in the AST
+class SynExpr(Expr): pass
+# Syntatic Element. Things like Formals that are neither Exprs nor Stmts
+class SynNode(Node): pass
 
 # crfl this should only have the master classes in it like Binop not Add
 exprnodes []
 
 
+"""
+The `trunk` is an (ordered) list of expression with names corresponding to LRM grammar names and all MUST have the property that if they appear lower in the list they include everything above them in the list. So the rule `a ::= b` must be a valid production rule for any a,b pair where a is below b.
+It can't be `a ::= 'if' b` or `a ::= '(' b ')'` or anything else like that, it has to be that something like `comparison` can literally just be a single atom/enclosure/power/u_expr/etc without any other syntax necessary.
 
 """
+def get_trunk_nodes(type):
+    assert type in trunk
+    idx = trunk_nodes.keys().index(type)
+    list_of_tuples = trunk_nodes.values()[:idx+1]
+    flattened = itertools.chain(*list_of_tuples)
+    return flattened
 
-finish_kwargs is only passed to the .finish() method of the outermost expr. Unfortunately we don't know which is the outermost expr until we've already build()ed it, hence we have this finish() system. We do NOT pass any kwargs to build() bc we fundamentally do not know the context for the expression we're building until after we've built it and built its left-recursive parent etc etc. So when our caller calls expr() and passes it some info, that info should be sent to the .finish() method of the outermost expression that's being returned, and it's up to the finish method to do whatever is required (which may involve recursing down its children)
+trunk_nodes = {
+        'enclosure':List,Dict,Set,GeneratorExpr,YieldAtom,ParenForm
+        'atom':Var,Lit
+        'primary':Attr,Subscript,Slice,Call
+        'power':Exp,
+        'u_expr':UAdd,USub,Invert
+        'm_expr'Mul,Div,FloorDiv,Mod,MatMul
+        'a_expr':Add,Sub
+        'shift_expr':ShiftL,ShiftR
+        'and_expr':BitAnd,
+        'xor_expr':BitXor,
+        'or_expr':BitOr,
+        'comparison':Compare,
+        'not_test':Not,
+        'and_test':And,
+        'or_test':Or,
+        'conditional_expression':Ternary,
+        'expression':Lambda,
+        #'starred_expression':StarredExpr, # == starred_list
+        }
 
-
-
-if `till` is provided it can be a seq of strs | functions | TOKENs and optionally end with a CONSTANT. If it would just be a single element seq then it doesn't need to be wrapped in a seq.
-
-till_function converts a till-list to a boolean function taking `elem` that returns true if the till condition fires
-
-"""
-
-def expr(elems, *, leftnodeclass=None, till=None, finish_kwargs=None, no_tuple=False):
-    finish_kwargs = dict() if finish_kwargs is None else finish_kwargs # can't use {} or dict() as a default argument or that one dict gets shared among all calls to expr() which is horrible.
-
-    till = till_function(till)
-
-    identified = []
-    for nodeclass in exprnodes:
-        if not nodeclass.left_recursive:
-            subclass = nodeclass.identify(elems)
-            if subclass is not None:
-                identified.append(subclass)
-
-    if len(identified) > 1:
-        raise NotImplementedError("{identified}\n{elems}") # if multiple appear to conflict we just go down both paths and throw out whichever one yields an Error. If neither yields an Error then we raise an Error. This could happen (in a recoverable way) if two language extensions were written by different people and had different syntax but similar enough syntax that the .identify test passed (e.g. they wrote same fairly minimal .identify function). We should probably also Warn people even when this does pass fine.
-
-    # Parens: If we see parens at the start of an expr that just means the leftmost subexpr must be the result of expr_assert_empty on the paren contents
-    if isinstance(elems[0],AParen):
-        # (1==1)==1 is not same as 1==1==1
-        # (a,),b is not same as a,b so we need to be careful abt this stuff esp in conjunction for the build() methods of Tuple and Compare
-        assert len(identified) == 0
-        node = expr_assert_empty(elems[0].body) # most keywords dont wanna be passed in here
-        elems = elems[1:]
-    elif len(identified) == 0:
-        raise NotImplementedError("{elems}") # the whole "eval empty expr to None" thing only applies in certain cases like Return statements so it shouldn't be a general thing. Also there's a lot of annoying error checking you have to do if you need to make sure expr didn't return None. So perhaps it should raise an error. And callers should use a wrapper like something similar to the expr_assert_empty() one.
-    else: # COMMON CASE
-        nodeclass = identified[0]
-        print(f"identified node class {nodeclass} for elems: {elems}")
-        node,elems = nodeclass.build(elems)
-        print(f"built node {node}\nremaining elems:{elems}")
-
-    # left-recursion to extend this lefthand expression as much as possible
-    identified = []
-    while True:
-        if len(elems) == 0:
-            break
-        if till(elems):
-            break
-        for nodeclass in exprnodes:
-            if nodeclass.left_recursive:
-                subclass = nodeclass.identify(elems)
-                if subclass is not None:
-                    identified.append(subclass)
-        if len(identified) > 1:
-            raise NotImplementedError("{identified}\n{elems}") # Same issue as above
-        if len(identified) == 0:
-            break
-        rightnodeclass = identified[0]
-        prec = precedence(leftnodeclass,rightnodeclass)
-        if prec is LEFT or prec is EQUAL:
-            break # left op is more tight so we return into our caller as a completed subexpr. Our caller will very quickly be finding this rightnodeclass again (unless kwargs somehow change things ofc)
-            # all/most left recursive grammars associate such that the thing on the left binds more tightly so EQUAL precedence behaves like LEFT
-        if prec is GATHER: # TODO rn gather is jank but it works. It's fine for now, bigger fish to fry.
-            node._gather = True
-            return node,elems
-        # prec is RIGHT
-        print(f"identified (left-recursive) node class {nodeclass} for elems: {elems}")
-        node,elems = rightnodeclass.build(node,elems) # build a larger left-recursive expr `node` from our original subexpr `node`
-        print(f"built (left-recursive) node {node}\nremaining elems:{elems}")
-
-    return node,elems
-
-
-
-
-#def expr(elems,usage=None,leftop=None):
-#    elem = elems[0]
-#    e = None
-#    # ATOMS
-#    if isinstance(elem,Atom):
-#        if isinstance(elem,AQuote):
-#            e = Str(elem)
-#        elif isinstance(elem,AParen):
-#            if len(elem.body) == 0:
-#                e = Tuple([],usage=usage)
-#            else:
-#                e = expr_assert_empty(elem.body,usage)
-#        elif isinstance(elem,ABracket):
-#            e = List(elem,usage=usage)
-#        elif isinstance(elem,ABrace):
-#            e = braced_expr(elem)
-#        elif isinstance(elem,ASH):
-#            e = Sh(elem)
-#        elif isinstance(elem,ADollarParen):
-#            e = EmbeddedPy(elem) # EmbeddedPy can just do expr_assert_empty(elem.body)
-#        else:
-#            raise NotImplementedError("{elem}")
-#    # TOKENS
-#    else:
-#        # LITS AND VARS
-#        if token(elem,[INTEGER,FLOAT,COMPLEX]):
-#            e = Num(elem)
-#        elif token(elem,ID):
-#            e = Var(elem,usage=usage)
-#        elif keyword(elem,['True','False','None']):
-#            e = NamedConstant(elem)
-#        # Anything we can figure out from the token(s) starting an expression
-#        # (or any further analysis. It just happens that we only need the very first token
-#        # to determine all of these, and anything that can't be determined by the first token
-#        # happens to begin with an expr as the leftmost item. If any constructs did not begin
-#        # with an expr nor keyword nor unique token then we would handle it here by doing
-#        # further analysis on `elems`
-#        elif token(elem,'*'):
-#            e,elems = Starred.init(elems,usage=usage) # note that more than just `elem` is needed here
-#        elif token(elem,UNOPSL):
-#            e,elems = UnopL.init(elems) # more than just first elem needed
-#        elif keyword(elem,'lambda'):
-#            e,elems = Lambda.init(elems)
-#        elif keyword(elem,'yield'):
-#            e,elems = Yield.init(elems)
-#        else:
-#            raise NotImplementedError("{elem}")
-#    """
-#    To this point we have parsed everything short of left-recursive expression, in particular:
-#        > Binop, Boolop, Compare, Call, Ternary, Attr, Subscript, ListComp
-#    However left-recursions have a fatal flaw that makes them easy to capture: they can't recurse forever, and eventually their lefthand expr must be one of the expressions we've already parsed.
-#    Furthermore, at this point the only way to parse a larger expression is through a left-recursive expression, because we already have used a parser to produce an expression `e` and therefore in order to extend this expression the extended expression must have the Expr `e` as its leftmost component and thus by definition the extended expression is left-recursive.
-#    """
-#
-#    raise NotImplementedError # TODO at this point trim `elems` to have dealt with consuming whatever was needed to make `e`
-#
-#
-#    #TODO fig out how to handle returning `elems` since __init__ can't do it, and to indicate how much of elems has been eaten
-#
-#
-#    # left-recursive
-#    while True:
-#        e_lhs = e # using the old `e` as the lhs
-#        if len(elems) == 0:
-#            break
-#        elem = elems[0]
-
-        # You have a complete subexpression `e_lhs`. You see a comma. This means that you need to build a tuple. This belongs in the `while` loop bc Tuples are effectively left-recursive so they could show up at any point once you have a subexpression.
-#        if token(elem,','):
-#            if no_tuple_recursion:
-#                return e,elems # return, with leading comma included so Tuple.init knows there's more to come.
-#            else:
-#                e_lhs,elems = Tuple.init(e_lhs,elems) # completely construct tuple. This completes a sub-expression and we can then move into more left-recursive items to extend it as usual.
-#
-#        # ATOM
-#        if isinstance(elem,Atom):
-#            if isinstance(elem,AParen):
-#                op = Call
-#            elif isinstance(elem,ABracket):
-#                op = Subscript
-#            else:
-#                raise NotImplementedError("{elem}")
-#        # TOKEN
-#        else:
-#            if token(elem,BINOPS):
-#                rightop = Binop
-#            elif token(elem,BOOLOPS):
-#                rightop = Boolop
-#            elif token(elem,CMPOPS):
-#                rightop = Boolop
-#            elif keyword(elem,'if'):
-#                rightop = Ternary
-#            elif token(elem,'.'):
-#                rightop = Attr
-#            elif keyword(elem,'for'):
-#                rightop = Comprehension
-#            elif token(elem,','):
-#                rightop = Tuple
-#            else:
-#                break # the very important case where the rest of elems is not useful for constructing an extended Expr
-#        # found an `op`
-#        rightop._typ = elem # needed by `precedence`
-#        if precedence(leftop,rightop) is LEFT:
-#            break # left op is more tight so we return into our caller as a completed subexpr
-#        else:
-#            kw = {'usage':usage} if isinstance(rightop,Targetable) else {}
-#            e = rightop.init(e_lhs,elems,leftop=rightop, **kw)
-#
-#    return e,elems
 
 
 # takes an operator to your left and an operator to your right and tells you which one applies to you first (binds more tightly). The None operator always loses. `left` and `right` are Node classes
 
 
 # For clarity everything must be written as the most exact subclass, not any superclasses like UnopL. Also this is good if people add more operators that subclass existing groups but with different precedence than is normal for the group. Easier to do this than to make a mechanism for enabling that.
-precedence_table = [
+
+trunk_precedence_table = [
 [Lambda], # Tightest binding
 [Ternary],
 [Or],
@@ -745,13 +1103,13 @@ precedence_table = [
 LEFT = CONSTANT()
 RIGHT = CONSTANT()
 SAME = CONSTANT()
-GATHER = CONSTANT()
+#GATHER = CONSTANT()
 
-def precedence(leftnodeclass,rightnodeclass):
+def trunk_precedence(leftnodeclass,rightnodeclass):
     if leftnodeclass is None:
         return RIGHT
-    if leftnodeclass.gathers(rightnodeclass):
-        return GATHER
+    #if leftnodeclass.gathers(rightnodeclass):
+    #    return GATHER
     left_tier = None
     right_tier = None
     for tier,classes in enumerate(precedence_table):
@@ -1110,36 +1468,7 @@ class Node(LocTagged): # abstract class, should never be instatiated
 
 
 
-
-# elems is always the first argument
-# elems is always the last thing returned (ALWAYS)
-def keyword(): pass # no return
-def token():
-    """
-    `query` is an elem or [elem]
-        -if [elem] is given then the 0th index elem is used
-        -if a single (nonlist) elem is given, then the return type is a bool indicating success/failure. After all, there's nothing useful to pass back to the caller since they didn't give us any list we can modify. This makes for nice if-statements too.
-    `tok` is a token CONSTANT() or str
-        -if a str is given then it's converted to the right token e.g. '(' -> RPAREN
-        (we allow both options since INTEGER for example has no valid str form other than making up an arbirary one which is unnecessary and confusing.)
-        -if a list (of CONSTANTs or strs) then matching on one token results in overall success
-    `fail` = FAIL | SILENT | None | BOOL
-        -Note that in all following descriptions `remains` is the rest of elems after consuming the processed token, and `original` is the original elems input.
-        -None (default) - SyntaxError raised on failure. Success returns: remains
-        -FAIL - returns (OK,remains) or (FAIL,original)
-        -SILENT - returns remains on success and original on failure. No exception raised.
-        -BOOL - returns True or False and nothing else
-        -*see note in `query` about how passing in a single elem will result in a boolean return type. An error will be thrown on any attempt to specify the fail= option.
-
-
-    """
-    pass
-
-
-
-def identifier(): pass
 def target(): pass
-def contains(): pass
 
 
 def stmts(elem_list_list): # [[elem]] -> [Stmt]
@@ -1168,7 +1497,6 @@ class Stmt(Node): # abstract
 
 class CompoundStmt(Stmt): pass # abstract
 class SimpleStmt(Stmt): pass # abstract
-class SynElem(Node): pass # Syntatic Element. Things like Formals that are neither Exprs nor Stmts
 
 ## Stmts that take an AColonList as input
 class FuncDef(CompoundStmt):
@@ -1176,10 +1504,10 @@ class FuncDef(CompoundStmt):
         super().__init__()
         head = compound.head
 
-        head = keyword(head,"def")
-        self.name,head = identifier(head)
-        self.args,head = Formals(head)
-        empty(head)
+        head.keyword("def")
+        self.name = head.identifier()
+        self.args = Formals(head)
+        head.assert_empty()
         self.body = stmts(compound.body)
 
 class Module(CompoundStmt):
@@ -1230,15 +1558,15 @@ def keyword_arg(elems): # [elems] -> KeywordArg,[elems] (or boolean if BOOL, etc
 # TODO maybe valued_arg is a better name since it's used for defaults too? idk. Both Args and Formals use it
 
 
-class Arg(SynElem):
+class Arg(SynNode):
     def __init__(self,name):
         self.name = name
-class KeywordArg(SynElem):
+class KeywordArg(SynNode):
     def __init__(self,name,val):
         self.name = name
         self.val = val
 
-class Args(SynElem):
+class Args(SynNode):
     def __init__(self,aparen_or_elem_list):
         super().__init__()
         if isinstance(aparen_or_elem_list,AParen):
@@ -1296,7 +1624,7 @@ class Args(SynElem):
 
 
 
-class Formals(SynElem):
+class Formals(SynNode):
     def __init__(self,aparen_or_elem_list):
         super().__init__()
         if isinstance(aparen_or_elem_list,AParen):
@@ -1476,7 +1804,19 @@ class If(CompoundStmt):
         empty(head)
         self.body = stmts(compound.body)
 
-class CONSTANT(object):
+""" New and improved Go-style parser
+class If(CompoundStmt):
+    def __init__(self,compound):
+        super().__init__()
+        head = compound.head
+
+        head.keyword("if")
+        self.cond = head.expr(head)
+        head.empty()
+        self.body = compound.body.stmts()
+"""
+
+class CONSTANT:
     instances = []
     def __init__(self,name,**kwargs):
         self.name=name
@@ -1515,6 +1855,9 @@ class Elif(CompoundStmt):
         if status is FAIL:
             head = keyword(head,"else")
             head = keyword(head,"if")
+        #if not head.keyword("elif"):
+        #    head.keyword("else")
+        #    head.keyword("if")
         self.cond = expr(head)
         empty(head)
         self.body = stmts(compound.body)
@@ -1558,6 +1901,24 @@ class With(CompoundStmt):
         head = compound.head
         self.withitems = []
 
+        head.keyword("with")
+        while not head.empty():
+            contextmanager = head.expression()
+            target = None
+            if head.keyword('as'):
+                target = head.target()
+            self.withitems.append(Withitem(contextmanager,target))
+
+        if len(self.withitems) == 0
+            raise SyntaxError("empty `with` statement header")
+        self.body = stmts(compound.body)
+
+class With(CompoundStmt):
+    def __init__(self,compound):
+        super().__init__()
+        head = compound.head
+        self.withitems = []
+
         head = keyword(head,"with")
         while not empty(elems,fail=BOOL):
             contextmanager,elems = expr(elems,till=(',',INCLUSIVE))
@@ -1570,7 +1931,7 @@ class With(CompoundStmt):
         if len(self.withitems) == 0
             raise SyntaxError("empty `with` statement header")
         self.body = stmts(compound.body)
-class Withitem(SynElem):
+class Withitem(SynNode):
     def __init__(self,contextmanager,target):
         self.contextmanager = contextmanager
         self.target = target
@@ -1668,7 +2029,7 @@ class Import(SimpleStmt):
                 alias = identifier(imp)
             self.withitems.append(Withitem(modstr,alias))
 
-class Importitem(SynElem):
+class Importitem(SynNode):
     def __init__(self,var,alias):
         self.var=var
         self.alias=alias
@@ -1783,20 +2144,168 @@ class Targetable:
 # TODO would be ultra nice to say identifier() vs identifer?() where the latter sends an extra argument which is just like fail=BOOL!
 
 class Var(Expr):
+    """
+    identifier   ::=  xid_start xid_continue*
+    id_start     ::=  <all characters in general categories Lu, Ll, Lt, Lm, Lo, Nl, the underscore, and characters with the Other_ID_Start property>
+    id_continue  ::=  <all characters in id_start, plus characters in the categories Mn, Mc, Nd, Pc and others with the Other_ID_Continue property>
+    xid_start    ::=  <all characters in id_start whose NFKC normalization is in "id_start xid_continue*">
+    xid_continue ::=  <all characters in id_continue whose NFKC normalization is in "id_continue*">
+    """
     def __init__(self,name):
         super().__init__()
         self.name = name
     @staticmethod
-    def identify(elems):
-        if identifier(elems,fail=BOOL):
+    def identify(p):
+        if p.or_false.identifier():
             return Var
         return None
     @staticmethod
-    def build(elems):
-        name,elems = identifier(elems)
-        return Var(name),elems
-class Starred(Expr):pass
-class List(Expr):pass
+    def build(p):
+        name = p.identifier()
+        return Var(name)
+
+# wraps a Node to mark it as starred
+class Starred(InitExpr):
+    def __init__(self,node):
+        super().__init__()
+        self.node = node
+class DoubleStarred(InitExpr):
+    def __init__(self,node):
+        super().__init__()
+        self.node = node
+
+class List(Expr):
+    """list_display ::=  "[" [starred_list | comprehension] "]" """
+    def __init__(self,body):
+        super().__init__()
+        self.body = body
+    @staticmethod
+    def identify(p):
+        if p.or_false.brackets():
+            return List
+        return None
+    @staticmethod
+    def build(p):
+        p = p.brackets()
+
+        def comprehension():
+            lhs = p.expression()
+            body = p.identify_build_node(Comprehension,lhs)
+            p.assert_empty()
+            return List(body)
+
+        return p.logical_or(comprehension,p.starred_list)
+
+class Set(Expr):
+    """set_display ::=  "[" [starred_list | comprehension] "]" """
+    def __init__(self,body):
+        super().__init__()
+        self.body = body
+    @staticmethod
+    def identify(p):
+        if p.or_false.braces():
+            return Set
+        return None
+    @staticmethod
+    def build(p):
+        p = p.braces()
+
+        def comprehension():
+            lhs = p.expression()
+            body = p.identify_build_node(Comprehension,lhs)
+            p.assert_empty()
+            return Set(body)
+
+        return p.logical_or(comprehension,p.starred_list)
+
+class Dict(Expr):
+    """
+    dict_display       ::=  "{" [key_datum_list | dict_comprehension] "}"
+    key_datum_list     ::=  key_datum ("," key_datum)* [","]
+    key_datum          ::=  expression ":" expression | "**" or_expr
+    dict_comprehension ::=  expression ":" expression comp_for
+    """
+    def __init__(self,body):
+        super().__init__()
+        self.body = body
+    @staticmethod
+    def identify(p):
+        if p.or_false.brackets():
+            return Set
+        return None
+    @staticmethod
+    def build(p):
+        p = p.braces()
+
+        def comprehension():
+            key = p.expression()
+            p.token(':')
+            val = p.expression()
+            kv = KVPair(key,val)
+            body = p.identify_build_node(Comprehension,kv)
+            p.assert_empty()
+            return Dict(body)
+
+        def kv_pair():
+            key = p.expression()
+            p.token(':')
+            val = p.expression()
+            kv = KVPair(key,val)
+            return kv
+        def dict_expansion():
+            p.token('**')
+            e = DoubleStarred(p.or_expr())
+            return e
+        def key_datum_list():
+            return Dict(p.comma_list(kv_pair,dict_expansion))
+
+        return p.logical_or(comprehension,key_datum_list)
+
+
+# key:val or key=val
+class KVPair(SynNode):
+    def __init__(self,key,val):
+        self.key = key
+        self.val = val
+
+
+"""
+This is a slight modification (eg comp_for is not recursive) but it actually has the same meaning as the LRM version.
+comprehension ::= Expr comp_for (comp_for | comp_if)*
+comp_for  = [async] for target_list in or_test
+comp_if = if expr_nocond
+"""
+
+class CompIf(SynNode):
+    def __init__(self,cond,comp_iter):
+        self.cond = cond
+        self.comp_iter = comp_iter
+
+class CompFor(SynNode):
+    def __init__(self,targets,iter,comp_iter):
+        self.targets = targets
+        self.iter = iter
+        self.comp_iter = comp_iter
+
+"""
+The iterable expression in the leftmost for clause is evaluated directly in the enclosing scope and then passed as an argument to the implictly nested scope. Subsequent for clauses and any filter condition in the leftmost for clause cannot be evaluated in the enclosing scope as they may depend on the values obtained from the leftmost iterable. For example: [x*y for x in range(10) for y in range(x, x+10)].
+"""
+@left_recursive
+class Comprehension(Expr):
+    def __init__(self,leftmost_for,for_if_list):
+        super().__init__()
+        self.comp_for = comp_for
+    @staticmethod
+    def identify(p):
+        if p.keyword('for') or p.keyword('async'):
+            return Comprehension
+        return None
+    @staticmethod
+    def build(lhs_node,p):
+        comp_for = p.comp_for()
+        return Comprehension(lhs_node,comp_for)
+
+
 
 
 # a,b,c
@@ -1811,44 +2320,21 @@ if you see a "," and are trying to expand via left recursion and ur not a
 
 """
 
-@left_recursive
-@gathers(Tuple)
-class Tuple(Expr):
-    def init(self,e_lhs,elems):
-        self.vals = [e_lhs]
-        if len(elems) == 1 and token(elems,',',fail=BOOL):
-            return self,elems # singleton Tuple
-        more = True
-        while token(elems,','): # `more` means expr() ended on a comma last time
-            e,elems = expr(elems,leftnodeclass=Tuple) # note that if there is more to this tuple it will
-            self.vals.append(e)
-        return self,elems
-    def __init__(self,vals):
+class Tuple(InitExpr):
+    def init(self,vals):
+        self.vals = vals
+
+class Ellipsis(Expr):
+    def __init__(self):
         super().__init__()
-        self.vals=vals
     @staticmethod
     def identify(elems):
-        if token(elems,',',fail=BOOL):
-            return Tuple
+        if token(elems,'...',fail=BOOL):
+            return Ellipsis
         return None
     @staticmethod
-    def build(lhs_node,elems):
-        elems = token(elems,',')
-        vals = [lhs_node]
-        while True:
-            # get an expr which cant be a tuple but might end right before a comma which is what happens in the gathering case
-            elems,e = expr(elems[1:],leftnodeclass=Tuple)
-            vals.append(e)
-            if hasattr(e,'_gather') and e._gather is True:
-                elems = token(elems,',')
-                continue
-            break
-        return Tuple(vals),elems
-
-class Set(Expr):pass
-class Dict(Expr):pass
-class Ellipsis(Expr):pass
-class Comprehension(Expr):pass
+    def build(elems):
+        return Ellipsis(),elems[1:]
 
 @left_recursive
 class Ternary(Expr):
@@ -1869,9 +2355,6 @@ class Ternary(Expr):
         elems = keyword(elems,'else')
         else_branch,elems = expr(elems)
         return Ternary(cond,lhs_node,else_branch),elems
-    @staticmethod
-    def finish(elems):
-        pass
 class Lambda(Expr):
     def __init__(self,args,body):
         super().__init__()
@@ -1883,18 +2366,23 @@ class Lambda(Expr):
             return Lambda
         return None
     @staticmethod
-    def build(elems):
-        elems = keyword(elems,'lambda')
-        sp = unsafe_split(elems,':',mode='first')
-        args_elems = sp[0]
-        args = Formals(args_elems)
-        elems = join(sp[1:])
-        # note that annotations are not allowed in lambda expressions. This is probably because the colon would make them impossible to parse in some cases since it's not necessarily embedded in any parentheses nclude <math.h>or anything. Therefore I should be fine to just use split()[0] to get the arguments.
-        body,elems = expr(elems)
-        return Lambda(args,body),elems
-    @staticmethod
-    def finish(elems):
-        pass
+    def build(p,nocond=False):
+        p.keyword('lambda')
+        args = p.parameter_list(no_annotations=True)
+        if nocond:
+            body = p.expression_nocond()
+        else:
+            body = p.expresssion()
+        return Lambda(args,body)
+
+#        elems = keyword(elems,'lambda')
+#        sp = unsafe_split(elems,':',mode='first')
+#        args_elems = sp[0]
+#        args = Formals(args_elems)
+#        elems = join(sp[1:])
+#        # note that annotations are not allowed in lambda expressions. This is probably because the colon would make them impossible to parse in some cases since it's not necessarily embedded in any parentheses nclude <math.h>or anything. Therefore I should be fine to just use split()[0] to get the arguments.
+#        body,elems = expr(elems)
+#        return Lambda(args,body),elems
 
 class Yield(Expr):
     """
@@ -1917,55 +2405,120 @@ class Yield(Expr):
         from = (status != FAIL)
         val,elems = expr(elems)
         return Yield(val,from),elems
+
+class ParenForm(SynExpr):
+    """
+    parenth_form ::=  "(" [starred_expression] ")"
+
+    A parenthesized expression list yields whatever that expression list yields: if the list contains at least one comma, it yields a tuple; otherwise, it yields the single expression that makes up the expression list.
+
+    An empty pair of parentheses yields an empty tuple object.
+    """
     @staticmethod
-    def finish(elems):
-        pass
+    def identify(p):
+        if p.or_false.parens():
+            return ParenForm
+        return None
+    @staticmethod
+    def build(p):
+        p = p.parens()
+        body = p.starred_expression()
+        p.assert_empty()
+
+        if len(body) == 1 and p.elems[-1].typ != COMMA:
+            return body[0] # eval to the single expression in the list
+
+        return Tuple(body)
+
+
 
 class Lit(Expr):
+    """
+    literal ::=  stringliteral | bytesliteral | integer | floatnumber | imagnumber
+
+    stringliteral   ::=  [stringprefix](shortstring | longstring)
+    stringprefix    ::=  "r" | "u" | "R" | "U" | "f" | "F"
+                         | "fr" | "Fr" | "fR" | "FR" | "rf" | "rF" | "Rf" | "RF"
+    shortstring     ::=  "'" shortstringitem* "'" | '"' shortstringitem* '"'
+    longstring      ::=  "'''" longstringitem* "'''" | '"""' longstringitem* '"""'
+    shortstringitem ::=  shortstringchar | stringescapeseq
+    longstringitem  ::=  longstringchar | stringescapeseq
+    shortstringchar ::=  <any source character except "\" or newline or the quote>
+    longstringchar  ::=  <any source character except "\">
+    stringescapeseq ::=  "\" <any source character>
+
+    bytesliteral   ::=  bytesprefix(shortbytes | longbytes)
+    bytesprefix    ::=  "b" | "B" | "br" | "Br" | "bR" | "BR" | "rb" | "rB" | "Rb" | "RB"
+    shortbytes     ::=  "'" shortbytesitem* "'" | '"' shortbytesitem* '"'
+    longbytes      ::=  "'''" longbytesitem* "'''" | '"""' longbytesitem* '"""'
+    shortbytesitem ::=  shortbyteschar | bytesescapeseq
+    longbytesitem  ::=  longbyteschar | bytesescapeseq
+    shortbyteschar ::=  <any ASCII character except "\" or newline or the quote>
+    longbyteschar  ::=  <any ASCII character except "\">
+    bytesescapeseq ::=  "\" <any ASCII character>
+
+    integer      ::=  decinteger | bininteger | octinteger | hexinteger
+    decinteger   ::=  nonzerodigit (["_"] digit)* | "0"+ (["_"] "0")*
+    bininteger   ::=  "0" ("b" | "B") (["_"] bindigit)+
+    octinteger   ::=  "0" ("o" | "O") (["_"] octdigit)+
+    hexinteger   ::=  "0" ("x" | "X") (["_"] hexdigit)+
+    nonzerodigit ::=  "1"..."9"
+    digit        ::=  "0"..."9"
+    bindigit     ::=  "0" | "1"
+    octdigit     ::=  "0"..."7"
+    hexdigit     ::=  digit | "a"..."f" | "A"..."F"
+
+    floatnumber   ::=  pointfloat | exponentfloat
+    pointfloat    ::=  [digitpart] fraction | digitpart "."
+    exponentfloat ::=  (digitpart | pointfloat) exponent
+    digitpart     ::=  digit (["_"] digit)*
+    fraction      ::=  "." digitpart
+    exponent      ::=  ("e" | "E") ["+" | "-"] digitpart
+
+    imagnumber ::=  (floatnumber | digitpart) ("j" | "J")
+
+    """
     def __init__(self,val):
         super().__init__()
         self.val = val
     @staticmethod
-    def identify(elems):
-        if (token(elems,INTEGER,fail=BOOL):
+    def identify(p):
+        if p.or_false.token(INTEGER):
             return Int
-        if token(elems,FLOAT,fail=BOOL):
+        if p.or_false.token(FLOAT):
             return Float
-        if token(elems,COMPLEX,fail=BOOL):
+        if p.or_false.token(COMPLEX):
             return Complex
-        if token(elems,BYTES,fail=BOOL):
+        if p.or_false.token(BYTES):
             return Bytes
-        if keyword(elems,'True',fail=BOOL):
+        if p.or_false.keyword('True'):
             return NamedConstant
-        if keyword(elems,'False',fail=BOOL):
+        if p.or_false.keyword('False'):
             return NamedConstant
-        if keyword(elems,'None',fail=BOOL):
+        if p.or_false.keyword('None'):
             return NamedConstant
-        return None
-if isinstance(elems[0],AQuote)):
-        return test
-    @staticmethod
-    def build(elems):
-        if token(elems,INTEGER,fail=BOOL):
-            return Int(int(elems[0].data)),elems[1:]
-        if token(elems,FLOAT,fail=BOOL):
-            return Float(float(elems[0].data)),elems[1:]
-        if token(elems,COMPLEX,fail=BOOL):
-            return Complex(complex(elems[0].data)),elems[1:]
-        if token(elems,BYTES,fail=BOOL):
-            return Bytes(bytes(elems[0].data)),elems[1:]
-        if keyword(elems,'True',fail=BOOL):
-            return NamedConstant(True),elems[1:]
-        if keyword(elems,'False',fail=BOOL):
-            return NamedConstant(False),elems[1:]
-        if keyword(elems,'None',fail=BOOL):
-            return NamedConstant(None),elems[1:]
-        if isinstance(elems[0],AQuote):
-            return Str(elems[0].data),elems[1:]
+        if p.or_false.quote():
+            return Str
         return None
     @staticmethod
-    def finish(elems):
-        pass
+    def build(p):
+        if p.or_false.token(INTEGER):
+            return Int(int(p.tok.data))
+        if p.or_false.token(FLOAT):
+            return Float(float(p.tok.data))
+        if p.or_false.token(COMPLEX):
+            return Complex(complex(p.tok.data))
+        if p.or_false.token(BYTES):
+            return Bytes(bytes(p.tok.data))
+        if p.or_false.keyword('True'):
+            return NamedConstant(True)
+        if p.or_false.keyword('False'):
+            return NamedConstant(False)
+        if p.or_false.keyword('None'):
+            return NamedConstant(None)
+        if p.or_false.quote():
+            return Str(p.tok.data)
+        return None
 class Num(Lit):pass
 class Int(Num):pass
 class Float(Num):pass
@@ -1990,13 +2543,13 @@ class UnopL(Expr):pass
         val,elems = expr(elems[1:],leftnodeclass=cls)
         return cls(val),elems
         raise NotImplementedError(f"Unrecongized left unary operator: {op}")
-    @staticmethod
-    def finish(elems):
-        pass
 class UAdd(UnopL):pass
 class USub(UnopL):pass
-class Not(UnopL):pass
 class Invert(UnopL):pass
+
+class Not(UnopL):pass
+
+
 
 @left_recursive
 class UnopR(Expr):
@@ -2055,9 +2608,6 @@ class UnopR(Expr):
                 return Subscript(lhs_node,slicers[0].start),elems[1:]
             # Slice
             return Slice(lhs_node,slicers),elems[1:]
-    @staticmethod
-    def finish(elems):
-        pass
 class Attr(UnopR):
     def __init__(self,val,attr):
         # no super() init. Putting everything in here is clearer.
@@ -2111,26 +2661,27 @@ boolop_subclass = {
 }
 
 @left_recursive
-class Binop(Expr):
+@expr_group
+class Binop(SynExpr):
     def __init__(self,lhs,rhs):
         super().__init__()
         self.lhs = lhs # no need to include `op` bc thats captured by subclass
         self.rhs = rhs
     @staticmethod
-    def identify(elems):
-        if token(elems,BINOPS,fail=BOOL):
-            return binop_subclass[elems[0].typ]
+    def identify(p):
+        if p.or_false.token(BINOPS):
+            return binop_subclass[p.tok.typ]
         return None
     @staticmethod
-    def build(lhs_node,elems):
-        op = elems[0].typ
+    def build(p,leftnode):
+        op = p.tok.typ
         cls = binop_subclass[op]
-        rhs_node,elems = expr(elems[1:],leftnodeclass=cls)
-        return cls(lhs_node,rhs_node),elems
-    @staticmethod
-    def finish(elems):
-        pass
-class Add(Binop):pass
+        rightnode = p.expr(elems[1:],leftnodeclass=cls)
+        return cls(lhs_node,rhs_node)
+class Add(Binop):
+    def build(p,leftnode):
+        op = p.tok.typ
+        cls = binop_subclass[op]
 class Sub(Binop):pass
 class Mul(Binop):pass
 class Div(Binop):pass
@@ -2195,7 +2746,7 @@ class Compare(Expr):
 
 
 # all these might be unnecessary
-#class CompareElem(SynElem): pass
+#class CompareElem(SynNode): pass
 #class Lt(CompareElem):pass
 #class Leq(CompareElem):pass
 #class Gt(CompareElem):pass
@@ -2232,14 +2783,14 @@ import inspect
 OFFSET=100
 # str_of_token(PERIOD) == 'PERIOD'
 ## important: if you add a TOKEN to this list you must also add it to the list of constants and REGEX_OF_TOKEN, and it must show up in the SAME position in the former two lists (it can show up somewhere different in REGEX_OF_TOKEN and that's fine)
-_str_of_token = ['INTEGER','PERIOD','COMMA','COLON','SEMICOLON','EXCLAM','PYPAREN','SH_LBRACE','SH_LPAREN','SH','LPAREN','RPAREN','LBRACE','RBRACE','LBRACKET','RBRACKET','ADD','SUB','MUL','FLOORDIV','DIV','EXP','MOD','SHIFTRIGHT','SHIFTLEFT','BITAND','BITOR','BITXOR','INVERT','NOT','AND','OR','LEQ','LT','GEQ','GT','EQ','NEQ','IS','ISNOT','IN','NOTIN','ASN','ESCQUOTE2','ESCQUOTE1','QUOTE2','QUOTE1','HASH','PIPE','ID','UNKNOWN','SOL','EOL','NEWLINE','KEYWORD']
+_str_of_token = ['INTEGER','PERIOD','COMMA','COLON','SEMICOLON','EXCLAM','PYPAREN','SH_LBRACE','SH_LPAREN','SH','LPAREN','RPAREN','LBRACE','RBRACE','LBRACKET','RBRACKET','ADD','SUB','MUL','FLOORDIV','DIV','EXP','MOD','SHIFTRIGHT','SHIFTLEFT','BITAND','BITOR','BITXOR','INVERT','NOT','AND','OR','LEQ','LT','GEQ','GT','EQ','NEQ','IS','ISNOT','IN','NOTIN','ASN','ESCQUOTE2','ESCQUOTE1','QUOTE2','QUOTE1','HASH','PIPE','ID','UNKNOWN','SOL','EOL','NEWLINE','KEYWORD','ELLIPSIS', 'AT']
 def str_of_token(t):
     return _str_of_token[t-OFFSET]
 # order doesn't matter in this list, as long as it's the same order as in the preceding list
-[INTEGER, PERIOD, COMMA, COLON, SEMICOLON, EXCLAM, PYPAREN, SH_LBRACE, SH_LPAREN, SH, LPAREN, RPAREN, LBRACE, RBRACE, LBRACKET, RBRACKET, ADD, SUB, MUL, FLOORDIV, DIV, EXP, MOD, SHIFTRIGHT, SHIFTLEFT, BITAND, BITOR, BITXOR, INVERT, NOT, AND, OR, LEQ, LT, GEQ, GT, EQ, NEQ, IS, ISNOT, IN, NOTIN, ASN, ESCQUOTE2, ESCQUOTE1, QUOTE2, QUOTE1, HASH, PIPE, ID, UNKNOWN, SOL, EOL, NEWLINE, KEYWORD] = [CONSTANT() for i in range(len(_str_of_token))] # we start at 100 so that we can still safely manually define constants in the frequently used -10..10 range of numbers with no fear of interference or overlap.
+[INTEGER, PERIOD, COMMA, COLON, SEMICOLON, EXCLAM, PYPAREN, SH_LBRACE, SH_LPAREN, SH, LPAREN, RPAREN, LBRACE, RBRACE, LBRACKET, RBRACKET, ADD, SUB, MUL, FLOORDIV, DIV, EXP, MOD, SHIFTRIGHT, SHIFTLEFT, BITAND, BITOR, BITXOR, INVERT, NOT, AND, OR, LEQ, LT, GEQ, GT, EQ, NEQ, IS, ISNOT, IN, NOTIN, ASN, ESCQUOTE2, ESCQUOTE1, QUOTE2, QUOTE1, HASH, PIPE, ID, UNKNOWN, SOL, EOL, NEWLINE, KEYWORD, ELLIPSIS, AT] = [CONSTANT(_str_of_token[i]) for i in range(len(_str_of_token))] # we start at 100 so that we can still safely manually define constants in the frequently used -10..10 range of numbers with no fear of interference or overlap.
 
 CMPOPS = [LEQ,LT,GEQ,GT,EQ,NEQ,IS,ISNOT,IN,NOTIN]
-BINOPS = [ADD, SUB, MUL, DIV, FLOORDIV, MOD, EXP, SHIFTRIGHT, SHIFTLEFT, BITAND, BITOR, BITXOR, MATMUL]
+BINOPS = [ADD, SUB, MUL, DIV, FLOORDIV, MOD, EXP, SHIFTRIGHT, SHIFTLEFT, BITAND, BITOR, BITXOR, AT]
 UNOPSL  = [ADD, SUB, NOT, INVERT] # yes, ADD and SUB can be unops
 UNOPSR  = [] # right side unary operators. There aren't any... yet! Well actually () and [] and . are UNOPSR really.
 BOOLOPS= [AND,OR]
@@ -2256,6 +2807,7 @@ def regex_compile(regex):
 # order is important in this list!
 regex_of_token = {
     INTEGER   : regex_compile(r'(\d+)'),
+    ELLIPSIS  : regex_compile(r'...'), # BEFORE PERIOD
     PERIOD    : regex_compile(r'\.'),
     COMMA     : regex_compile(r','),
     COLON     : regex_compile(r':'),
@@ -2287,6 +2839,7 @@ regex_of_token = {
     BITAND    : regex_compile(r'&'),
     BITOR     : regex_compile(r'\|'),
     BITXOR    : regex_compile(r'\^'),
+    AT        : regex_compile(r'@'),
 
     # UNOPS
     INVERT    : regex_compile(r'~'),
@@ -2326,25 +2879,25 @@ regex_of_token = {
 assert len(regex_of_token) == len(_str_of_token)
 TOKENS = list(regex_of_token.keys())
 
-def closer_of_opener(opener_tok):
-    if isinstance(opener_tok,Tok):
-        opener_tok = opener_tok.typ
-
-    if opener_tok == LPAREN:
-        return Tok(RPAREN,'',')')
-    if opener_tok == PYPAREN:
-        return Tok(RPAREN,'',')')
-    if opener_tok == LBRACE:
-        return Tok(RBRACE,'','}')
-    if opener_tok == LBRACKET:
-        return Tok(RBRACKET,'',']')
-    if opener_tok == QUOTE1:
-        return Tok(QUOTE1,'','\'')
-    if opener_tok == QUOTE2:
-        return Tok(QUOTE2,'','"')
-    if opener_tok == SOL:
-        return Tok(EOL,'','')
-    raise NotImplementedError
+#def closer_of_opener(opener_tok):
+#    if isinstance(opener_tok,Tok):
+#        opener_tok = opener_tok.typ
+#
+#    if opener_tok == LPAREN:
+#        return Tok(RPAREN,'',')')
+#    if opener_tok == PYPAREN:
+#        return Tok(RPAREN,'',')')
+#    if opener_tok == LBRACE:
+#        return Tok(RBRACE,'','}')
+#    if opener_tok == LBRACKET:
+#        return Tok(RBRACKET,'',']')
+#    if opener_tok == QUOTE1:
+#        return Tok(QUOTE1,'','\'')
+#    if opener_tok == QUOTE2:
+#        return Tok(QUOTE2,'','"')
+#    if opener_tok == SOL:
+#        return Tok(EOL,'','')
+#    raise NotImplementedError
 
 
 # This is a parsed token
