@@ -26,6 +26,14 @@ TODO
 -ensure all super().__init__() calls are done
 -ensure `p` not `elems` everywhere
 -replace keyword_arg() with KVPair stuff
+-make or_expr() etc take left= optionally etc for rest
+-verifying that leftnode has the right type for each thing?? like in Compare you could have it make sure its an 'or_expr' to the left?
+- maybe have token() return a Tok to make stuff like Compare better
+
+
+
+if Expr has .identify then run that to get the subclass (recursive) and when you finally get a subclass run its .build
+
 
 
 
@@ -1056,7 +1064,7 @@ trunk_nodes = {
         'enclosure':List,Dict,Set,GeneratorExpr,YieldAtom,ParenForm
         'atom':Var,Lit
         'primary':Attr,Subscript,Slice,Call
-        'power':Exp,
+        'power':Exp,AwaitExpr,
         'u_expr':UAdd,USub,Invert
         'm_expr'Mul,Div,FloorDiv,Mod,MatMul
         'a_expr':Add,Sub
@@ -2394,11 +2402,6 @@ class Yield(Expr):
         self.val = val
         self.from = from
     @staticmethod
-    def identify(elems):
-        if keyword(elems,'yield',fail=BOOL):
-            return Yield
-        return None
-    @staticmethod
     def build(elems):
         elems = keyword(elems,'yield')
         status,elems = keyword(elems,'from',fail=FAIL)
@@ -2414,11 +2417,6 @@ class ParenForm(SynExpr):
 
     An empty pair of parentheses yields an empty tuple object.
     """
-    @staticmethod
-    def identify(p):
-        if p.or_false.parens():
-            return ParenForm
-        return None
     @staticmethod
     def build(p):
         p = p.parens()
@@ -2660,9 +2658,11 @@ boolop_subclass = {
     OR: Or
 }
 
+
+
+
 @left_recursive
-@expr_group
-class Binop(SynExpr):
+class Binop(Expr):
     def __init__(self,lhs,rhs):
         super().__init__()
         self.lhs = lhs # no need to include `op` bc thats captured by subclass
@@ -2672,50 +2672,62 @@ class Binop(SynExpr):
         if p.or_false.token(BINOPS):
             return binop_subclass[p.tok.typ]
         return None
-    @staticmethod
-    def build(p,leftnode):
-        op = p.tok.typ
-        cls = binop_subclass[op]
-        rightnode = p.expr(elems[1:],leftnodeclass=cls)
-        return cls(lhs_node,rhs_node)
-class Add(Binop):
-    def build(p,leftnode):
-        op = p.tok.typ
-        cls = binop_subclass[op]
+    @classmethod
+    def gen_build(cls,type,rhstype):
+        @staticmethod
+        def build(p,leftnode):
+            rightnode = p.trunk_expr(rhstype,left=type)
+            return cls(leftnode,rightnode)
+        cls.build = build
+
+# a_expr
+class Add(Binop):pass
+Add.gen_build('a_expr','m_expr')
 class Sub(Binop):pass
-class Mul(Binop):pass
-class Div(Binop):pass
-class FloorDiv(Binop):pass
-class Mod(Binop):pass
-class MatMul(Binop):pass
-class Exp(Binop):pass
-class ShiftR(Binop):pass
-class ShiftL(Binop):pass
-class BitAnd(Binop):pass
-class BitOr(Binop):pass
-class BitXor(Binop):pass
+Sub.gen_build('a_expr','m_expr')
 
+# m_expr
+class Mul(Binop): pass
+Mul.gen_build('m_expr','u_expr')
+class MatMul(Binop): pass
+MatMul.gen_build('m_expr','m_expr')
+class FloorDiv(Binop): pass
+FloorDiv.gen_build('m_expr','u_expr')
+class Div(Binop): pass
+Div.gen_build('m_expr','u_expr')
+class Mod(Binop): pass
+Mod.gen_build('m_expr','u_expr')
 
-# eh i guess inference and such will work just as well on nested boolops as if we flattened it all out so this is fine
-@left_recursive
-class Boolop(Expr):
-    def __init__(self,lhs,rhs):
-        super().__init__()
-        self.lhs = lhs # no need to include `op` bc thats captured by subclass
-        self.rhs = rhs
-    @staticmethod
-    def identify(elems):
-        if token(elems,BOOLOPS,fail=BOOL):
-            return boolop_subclass[elems[0].typ]
-        return None
-    @staticmethod
-    def build(lhs_node,elems):
-        op = elems[0].typ
-        cls = boolop_subclass[op]
-        rhs_node,elems = expr(elems[1:],leftnodeclass=cls)
-        return cls(lhs_node,rhs_node),elems
-class And(Boolop):pass
-class Or(Boolop):pass
+# shift_expr
+class ShiftL(Binop): pass
+ShiftL.gen_build('shift_expr','a_expr')
+class ShiftR(Binop): pass
+Mod.gen_build('shift_expr','a_expr')
+
+# and_expr
+class BitAnd(Binop): pass
+BitAnd.gen_build('and_expr','shift_expr')
+
+# xor_expr
+class BitXor(Binop): pass
+BitXor.gen_build('xor_expr','and_expr')
+
+# or_expr
+class BitOr(Binop): pass
+BitOr.gen_build('or_expr','xor_expr')
+
+# TODO make sure left=power is correct
+# power
+class Exp(Binop): pass
+BitOr.gen_build('power','u_expr')
+
+# and_test
+class And(Binop):pass
+And.gen_build('and_test','not_test')
+
+# or_test
+class Or(Binop):pass
+Or.gen_build('or_test','and_test')
 
 @left_recursive
 @gathers(Compare)
@@ -2726,23 +2738,20 @@ class Compare(Expr):
         self.vals = vals
     @staticmethod
     def identify(elems):
-        if token(elems,CMPOPS,fail=BOOL):
+        if p.or_false.token(CMPOPS):
             return Compare
         return None
     @staticmethod
-    def build(elems,lhs_node,leftnodeclass):
-        vals = [lhs_node]
-        ops = [elems[0].typ]
+    def build(p,leftnode):
+        vals = [leftnode]
+        ops = []
         while True:
-            # parse an expr which is at most a single comparison
-            elems,e = expr(elems[1:],leftnodeclass=Compare)
+            op = p.tok.typ
+            p.token(CMPOPS)
+            e = p.trunk_expr('or_expr',left='comparison')
             vals.append(e)
-            if hasattr(e,'_gather') and e._gather is True:
-                ops.append(elems[0].typ)
-                continue
-            break
-
-        return Compare(ops,vals),elems
+            ops.append(op)
+        return Compare(ops,vals)
 
 
 # all these might be unnecessary
@@ -2790,10 +2799,9 @@ def str_of_token(t):
 [INTEGER, PERIOD, COMMA, COLON, SEMICOLON, EXCLAM, PYPAREN, SH_LBRACE, SH_LPAREN, SH, LPAREN, RPAREN, LBRACE, RBRACE, LBRACKET, RBRACKET, ADD, SUB, MUL, FLOORDIV, DIV, EXP, MOD, SHIFTRIGHT, SHIFTLEFT, BITAND, BITOR, BITXOR, INVERT, NOT, AND, OR, LEQ, LT, GEQ, GT, EQ, NEQ, IS, ISNOT, IN, NOTIN, ASN, ESCQUOTE2, ESCQUOTE1, QUOTE2, QUOTE1, HASH, PIPE, ID, UNKNOWN, SOL, EOL, NEWLINE, KEYWORD, ELLIPSIS, AT] = [CONSTANT(_str_of_token[i]) for i in range(len(_str_of_token))] # we start at 100 so that we can still safely manually define constants in the frequently used -10..10 range of numbers with no fear of interference or overlap.
 
 CMPOPS = [LEQ,LT,GEQ,GT,EQ,NEQ,IS,ISNOT,IN,NOTIN]
-BINOPS = [ADD, SUB, MUL, DIV, FLOORDIV, MOD, EXP, SHIFTRIGHT, SHIFTLEFT, BITAND, BITOR, BITXOR, AT]
+BINOPS = [ADD, SUB, MUL, DIV, FLOORDIV, MOD, EXP, SHIFTRIGHT, SHIFTLEFT, BITAND, BITOR, BITXOR, AT, AND, OR]
 UNOPSL  = [ADD, SUB, NOT, INVERT] # yes, ADD and SUB can be unops
 UNOPSR  = [] # right side unary operators. There aren't any... yet! Well actually () and [] and . are UNOPSR really.
-BOOLOPS= [AND,OR]
 
 
 COMMON_ALLOWED_CHILDREN = set([QUOTE1,QUOTE2,LBRACKET,LBRACE,LPAREN,SH_LBRACE,SH, SH_LPAREN, HASH])
