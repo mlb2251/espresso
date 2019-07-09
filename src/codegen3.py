@@ -14,11 +14,10 @@ keywords = set(kwlist)
 TODO
 -`Not` shd not be in UnopL bc of precedence
 -comp_for needs internal recursion as in LRM bc its used in generators too so unless you wanna track dependencies you gotta go verbatim
--add the blank-to-None conversion for special cases like return stmts
--add autoinserted return None stmt at the end
+-add the blank-to-None conversion for special cases like return stmts -- thats prob in the Return syntax already
+-add autoinserted return None stmt at the end of fns
 -make build(p,leftnode) to format
 -write tok_of_tok_like() -- should be easy just use .data
--currently precedence_table is opp order of trunk
 -removing GATHER i guess?
 -Improve Lit parsing to cover all cases
 -Imporve Var parsing to cover all cases
@@ -28,13 +27,17 @@ TODO
 -replace keyword_arg() with KVPair stuff
 -make or_expr() etc take left= optionally etc for rest
 -verifying that leftnode has the right type for each thing?? like in Compare you could have it make sure its an 'or_expr' to the left?
-- maybe have token() return a Tok to make stuff like Compare better
+-maybe have token() return a Tok to make stuff like Compare better
 
+-add loc_tagged stuff using the decorator i think i wrote and phone notes
+
+-TODO to speed things up a LOT you can do use logical_or in place of xor everywhere. Maybe by just doing Parser.logical_xor = Parser.logical_or for unsafe but fast mode
 
 
 if Expr has .identify then run that to get the subclass (recursive) and when you finally get a subclass run its .build
 
 
+Starred and DoubleStarred InitExpr's are used to wrap nodes in stars
 
 
 
@@ -149,10 +152,10 @@ class Parser():
         #self.fail = FailCallWrapper(self)
         self.must = AssertCallWrapper(self)
         self.or_none = OptionalCallWrapper(self,None) # or_none is most encouraged
+        self.not_none = NotNoneCallWrapper(self) # or_none is most encouraged
         self.or_fail = OptionalCallWrapper(self,FAIL)
         self.or_false = OptionalCallWrapper(self,False)
         self.or_ = (lambda retval: OptionalCallWrapper(self,retval))
-        self.peek = PeekCallWrapper(self)
     def next(self):
         if self.idx >= len(self.elems):
             raise SyntaxError("Calling next() when already passed the last elem")
@@ -209,7 +212,7 @@ class Parser():
     @contextmanager
     def peek(self):
         """
-        contextmanager that rewinds token stream to wherever it started
+        contextmanager that rewinds token stream to wherever it started, and doesnt stop error propagation
         """
         idx = self.idx
         try:
@@ -217,9 +220,9 @@ class Parser():
         finally:
             self.idx = idx
     @contextmanager
-    def attempt(self):
+    def maybe(self):
         """
-        contextmanager that rewinds token stream to wherever it started only if a SyntaxError is raised
+        contextmanager that rewinds token stream to wherever it started only if a SyntaxError is raised, and catches the error.
         """
         idx = self.idx
         try:
@@ -233,8 +236,8 @@ class Parser():
         return p.comma_list(p.expression)
     def expression_nocond():
         def lambda_expr():
-            return self.identify_build_node(Lambda,nocond=True)
-        return self.logical_or(lambda_expr,or_test)
+            return self.build_node(Lambda,nocond=True)
+        return self.logical_xor(lambda_expr,or_test)
     def expression(self):
         return self.trunk_expr('expression')
     def or_expr(self):
@@ -267,7 +270,7 @@ class Parser():
         comp_iter = self.or_none.comp_iter()
         return CompIf(cond,comp_iter)
     def comp_iter(self):
-        return self.logical_or(self.comp_for,self.comp_if)
+        return self.logical_xor(self.comp_for,self.comp_if)
     def target(self):
         """
         | "(" [target_list] ")"
@@ -281,7 +284,7 @@ class Parser():
         def parens_or_brackets():
             # try parens or brackets
             self.or_none.parens()
-            contents = self.logical_or(self.parens,self.brackets)
+            contents = self.logical_xor(self.parens,self.brackets)
             targets = contents.or_none.target_list()
             contents.assert_empty()
             return targets # success with parens or brackets means return a target_list (or None)
@@ -298,7 +301,7 @@ class Parser():
                 raise SyntaxError()
             return e
 
-        return self.logical_or(parens_or_brackets,starred,primary_subtype)
+        return self.logical_xor(parens_or_brackets,starred,primary_subtype)
 
     def parens(p):
         if not isinstance(p.tok,AParen):
@@ -319,18 +322,34 @@ class Parser():
     def target_list(p):
         return p.comma_list(p.target)
     ## META FNS
-    def logical_or(self,*option_fns):
+    def logical_xor(self,*option_fns):
         for fn in option_fns: # try each fn
             with self.maybe():
                 return fn()
         raise SyntaxError
+    def logical_xor(self,*option_fns):
+        """
+        A much slower version of logical_or that requires that EXACTLY 1 match is found among option_fns.
+        """
+        ret = []
+        fns = []
+        for fn in option_fns: # try each fn
+            with self.peek(): # force rewind
+                with self.maybe():
+                    ret.append(fn())
+                    fns.append(fn) # only if prev line succeeds
+        if len(ret) > 1:
+            raise Exception(f"Multiple option_fns are matching the same parser in logical_xor! {fns} {ret}")
+        if len(fns) == len(ret) == 1:
+            return fn() # we gotta actually execute it for real now since we just peek()'d before
+        raise SyntaxError # 0 matches
     def comma_list(self,*option_fns):
         results = []
         at_least_one = False
         while True:
             success = False
             with self.maybe():
-                res = self.logical_or(*option_fns)
+                res = self.logical_xor(*option_fns)
                 results.append(res)
                 at_least_one = True
                 success = True
@@ -344,27 +363,23 @@ class Parser():
         return results
     ## BUILDING AND IDENTIFYING ODES
     def build_node(self,nodeclass,leftnode=None,**kwargs):
+        assert not isinstance(nodeclass,InitExpr)
+        assert hasattr(nodeclass,'build') or hasattr(nodeclass,'identify')
+        # identify() case
+        if hasattr(nodeclass,identify):
+            with self.peek(): # will reset token stream but wont catch errors
+                cls = nodeclass.not_none.identify(self) # may throw SyntaxError
+            return self.not_none.build_node(cls,leftnode=leftnode,**kwargs)
+        # non identify() case
         if nodeclass.left_recursive:
-            return nodeclass.build(self,leftnode=leftnode,**kwargs)
-        assert leftnode is None
-        return nodeclass.build(self)
-    def identify_node(self,nodeclass):
-        with self.peek():
-            cls = nodeclass.identify(self)
-        return cls
-    def identify_build_node(self,nodeclass,leftnode=None,**kwargs):
-        """
-        identify() and build() with syntax errors on either step on failure
-        """
-        with self.peek():
-            cls = nodeclass.identify(self)
-        if cls is None:
-            raise SyntaxError
-        if cls.left_recursive:
-            return cls.build(self,leftnode=leftnode,**kwargs)
-        assert leftnode is None
-        return cls.build(self,**kwargs)
-    def trunk_expr(self, type, *, leftnodeclass=None):
+            assert leftnode is not None
+            node = nodeclass.build(self,leftnode=leftnode,**kwargs)
+        else:
+            assert leftnode is None
+            node = nodeclass.build(self)
+        assert node is not None, f"{nodeclass}.build returned None"
+        return node
+    def trunk_expr(self, type):
         """
         Parse an expression that lies at expression type `type` (e.g. 'or_test') along the expr trunk.
 
@@ -373,78 +388,52 @@ class Parser():
         """
         nodeclasses = get_trunk_nodes(type)
 
-        identified = []
-        for nodeclass in nodeclasses:
+        # make fns that can be logical_or()'d together
+        non_recursive = []
+        for cls in nodeclasses:
             if not nodeclass.left_recursive:
-                cls = self.identify(nodeclass)
-                if cls is not None:
-                    identified.append(cls)
+                def fn():
+                    return self.build_node(cls)
+                non_recursive.append(fn)
 
-        if len(identified) > 1:
-            """if multiple appear to conflict we just go down both paths and throw out whichever one yields an Error. If neither yields an Error then we raise an Error. This could happen (in a recoverable way) if two language extensions were written by different people and had different syntax but similar enough syntax that the .identify test passed (e.g. they wrote same fairly minimal .identify function). We should probably also Warn people even when this does pass fine."""
-            raise NotImplementedError(f"{identified}\n{self}")
-
-        # Parens: If we see parens at the start of an expr that just means the leftmost subexpr must be the result of expr_assert_empty on the paren contents
-#        if isinstance(elems[0],AParen):
-#            # (1==1)==1 is not same as 1==1==1
-#            # (a,),b is not same as a,b so we need to be careful abt this stuff esp in conjunction for the build() methods of Tuple and Compare
-#            assert len(identified) == 0
-#            node = expr_assert_empty(elems[0].body) # most keywords dont wanna be passed in here
-#            elems = elems[1:]
-        elif len(identified) == 0:
-            raise SyntaxError(f"No valid leftmost subexpression found for {self}")
-
-        nodeclass = identified[0]
-        print(f"identified node class {nodeclass} for parser: {self}")
-        node = self.build_node(nodeclass)
-        print(f"built node {node}\nremaining parser:{self}")
+        node = self.logical_xor(*non_recursive) # this can throw synerr
 
         # left-recursion to extend this lefthand expression as much as possible
         while True:
+            # populate `left_recursive` for use with logical_or()
+            left_recursive = []
+            for cls in nodeclasses:
+                if nodeclass.left_recursive:
+                    def fn():
+                        return self.build_node(cls,leftnode=node) # <- key difference is leftnode
+                    non_recursive.append(fn)
+
+
+            node_or_none = self.or_none.logical_xor(*non_recursive)
+            if node is None: # exit on failure to expand more
+                break
+            node = node_or_none
+
+            # exit if empty
             if self.empty():
                 break
-            identified = []
-            for nodeclass in nodeclasses:
-                if nodeclass.left_recursive:
-                    cls = self.identify_node(nodeclass)
-                    if cls is not None:
-                        identified.append(cls)
-            if len(identified) == 0:
-                break # end of expansion
-            if len(identified) > 1:
-                raise NotImplementedError(f"{identified}\n{self}") # Same issue as above
-
-            rightnodeclass = identified[0]
-            prec = precedence(leftnodeclass,rightnodeclass)
-            if prec is LEFT or prec is EQUAL:
-                """left op is more tight so we return into our caller as a completed subexpr. Our caller will very quickly be finding this rightnodeclass again (unless kwargs somehow change things ofc)
-                all/most left recursive grammars associate such that the thing on the left binds more tightly so EQUAL precedence behaves like LEFT"""
-                break
-#            if prec is GATHER:
-#                # TODO rn gather is jank but it works. It's fine for now, bigger fish to fry.
-#                node._gather = True
-#                return node,elems
-            # prec is RIGHT
-            print(f"identified (left-recursive) node class {nodeclass} for elems: {self}")
-            node = self.build_node(rightnodeclass,leftnode=node) # build a larger left-recursive expr `node` from our original subexpr `node`
-            print(f"built (left-recursive) node {node}\nremaining elems:{self}")
 
         return node
 
-class PeekCallWrapper:
-    """
-    Return normal result and reset the tokenstream to where it was at the start of the call.
-    """
-    def __init__(self,parser):
-        self.parser = parser
-    def __getattr__(self,key):
-        fn = getattr(self.parser,key)
-        def wrapper(*args,**kwargs):
-            idx = self.parser.idx
-            ret = fn(*args,**kwargs)
-            self.parser.idx = idx
-            return ret
-        return wrapper
+#class PeekCallWrapper:
+#    """
+#    Return normal result and reset the tokenstream to where it was at the start of the call.
+#    """
+#    def __init__(self,parser):
+#        self.parser = parser
+#    def __getattr__(self,key):
+#        fn = getattr(self.parser,key)
+#        def wrapper(*args,**kwargs):
+#            idx = self.parser.idx
+#            ret = fn(*args,**kwargs)
+#            self.parser.idx = idx
+#            return ret
+#        return wrapper
 
 class OptionalCallWrapper:
     """
@@ -464,9 +453,25 @@ class OptionalCallWrapper:
                 return self.retval
         return wrapper
 
+class NotNoneCallWrapper:
+    """
+    Assert that return value is not None -- real crash (not SyntaxError)
+    If the fn returns a SyntaxError is avoids this and nothing happens (intentionally)
+    """
+    def __init__(self,parser):
+        self.parser = parser
+    def __getattr__(self,key):
+        fn = getattr(self.parser,key)
+        def wrapper(*args,**kwargs):
+            idx = self.parser.idx
+            ret = fn(*args,**kwargs)
+            assert ret is not None
+            return ret
+        return wrapper
+
 class AssertCallWrapper:
     """
-    Assert that return value is not False and is not None
+    SyntaxError fi return value is not False and is not None
     """
     def __init__(self,parser):
         self.parser = parser
@@ -1034,7 +1039,7 @@ class Expr(Node):
         """
         raise NotImplementedError
     @staticmethod
-    def build(elems): # left-recursive nodes take an additional parameter leftnode
+    def build(p): # left-recursive nodes take an additional parameter leftnode
         raise NotImplementedError
 
 # an Expr with no build/identify functions
@@ -1060,8 +1065,9 @@ def get_trunk_nodes(type):
     flattened = itertools.chain(*list_of_tuples)
     return flattened
 
+
 trunk_nodes = {
-        'enclosure':List,Dict,Set,GeneratorExpr,YieldAtom,ParenForm
+        'enclosure':List,Dict,Set,GeneratorExpr,YieldAtom,ParenForm # tightest binding
         'atom':Var,Lit
         'primary':Attr,Subscript,Slice,Call
         'power':Exp,AwaitExpr,
@@ -1077,64 +1083,11 @@ trunk_nodes = {
         'and_test':And,
         'or_test':Or,
         'conditional_expression':Ternary,
-        'expression':Lambda,
+        'expression':Lambda, # weakest binding
         #'starred_expression':StarredExpr, # == starred_list
         }
 
 
-
-# takes an operator to your left and an operator to your right and tells you which one applies to you first (binds more tightly). The None operator always loses. `left` and `right` are Node classes
-
-
-# For clarity everything must be written as the most exact subclass, not any superclasses like UnopL. Also this is good if people add more operators that subclass existing groups but with different precedence than is normal for the group. Easier to do this than to make a mechanism for enabling that.
-
-trunk_precedence_table = [
-[Lambda], # Tightest binding
-[Ternary],
-[Or],
-[And],
-[Not],
-[Compare], # normally we do NOT allow superclasses in this list. Note that Compare is NOT a superclass as it is actually the node type that gets used, and Neq/Is/In/etc are not classes as they can be chained together in expressions like x <= 1 == 2 where the whole expression can't rightfully be called anything other than a Compare (unless a CompoundCompare or something were introduced). Calling it Compare forces everyone to deal with this unusual case explicitly which is good probably, unless it makes it unreadable for any reason.
-[BitOr],
-[BitXor],
-[BitAnd],
-[ShiftL, ShiftR],
-[Add, Sub],
-[Mul, MatMul, Div, FloorDiv, Mod],
-[UAdd, USub, Invert],
-[Exp],
-[Await],
-[Subscript, Slice, Call, Attr],
-[Tuple, List, Dict, Set], # Weakest binding
-]
-
-LEFT = CONSTANT()
-RIGHT = CONSTANT()
-SAME = CONSTANT()
-#GATHER = CONSTANT()
-
-def trunk_precedence(leftnodeclass,rightnodeclass):
-    if leftnodeclass is None:
-        return RIGHT
-    #if leftnodeclass.gathers(rightnodeclass):
-    #    return GATHER
-    left_tier = None
-    right_tier = None
-    for tier,classes in enumerate(precedence_table):
-        if leftnodeclass in classes:
-            left_tier = tier
-        if rightnodeclass in classes:
-            right_tier = tier
-        if left_tier is not None and right_tier is not None:
-            break
-    # higher tier is weaker binding
-    assert left_tier is not None and right_tier is not None, f"{leftnodeclass,rightnodeclass}"
-    if left_tier < right_tier:
-        return LEFT
-    if left_tier > right_tier:
-        return RIGHT
-    if left_tier == right_tier:
-        return SAME
 
 
 
@@ -2163,11 +2116,6 @@ class Var(Expr):
         super().__init__()
         self.name = name
     @staticmethod
-    def identify(p):
-        if p.or_false.identifier():
-            return Var
-        return None
-    @staticmethod
     def build(p):
         name = p.identifier()
         return Var(name)
@@ -2177,10 +2125,29 @@ class Starred(InitExpr):
     def __init__(self,node):
         super().__init__()
         self.node = node
+
 class DoubleStarred(InitExpr):
     def __init__(self,node):
         super().__init__()
         self.node = node
+# key:val or key=val
+
+## SYN NODES
+class KVPair(SynNode):
+    def __init__(self,key,val):
+        self.key = key
+        self.val = val
+
+class CompIf(SynNode):
+    def __init__(self,cond,comp_iter):
+        self.cond = cond
+        self.comp_iter = comp_iter
+
+class CompFor(SynNode):
+    def __init__(self,targets,iter,comp_iter):
+        self.targets = targets
+        self.iter = iter
+        self.comp_iter = comp_iter
 
 class List(Expr):
     """list_display ::=  "[" [starred_list | comprehension] "]" """
@@ -2188,21 +2155,16 @@ class List(Expr):
         super().__init__()
         self.body = body
     @staticmethod
-    def identify(p):
-        if p.or_false.brackets():
-            return List
-        return None
-    @staticmethod
     def build(p):
         p = p.brackets()
 
         def comprehension():
             lhs = p.expression()
-            body = p.identify_build_node(Comprehension,lhs)
+            body = p.build_node(Comprehension,lhs)
             p.assert_empty()
             return List(body)
 
-        return p.logical_or(comprehension,p.starred_list)
+        return p.logical_xor(comprehension,p.starred_list)
 
 class Set(Expr):
     """set_display ::=  "[" [starred_list | comprehension] "]" """
@@ -2210,21 +2172,16 @@ class Set(Expr):
         super().__init__()
         self.body = body
     @staticmethod
-    def identify(p):
-        if p.or_false.braces():
-            return Set
-        return None
-    @staticmethod
     def build(p):
         p = p.braces()
 
         def comprehension():
             lhs = p.expression()
-            body = p.identify_build_node(Comprehension,lhs)
+            body = p.build_node(Comprehension,lhs)
             p.assert_empty()
             return Set(body)
 
-        return p.logical_or(comprehension,p.starred_list)
+        return p.logical_xor(comprehension,p.starred_list)
 
 class Dict(Expr):
     """
@@ -2237,11 +2194,6 @@ class Dict(Expr):
         super().__init__()
         self.body = body
     @staticmethod
-    def identify(p):
-        if p.or_false.brackets():
-            return Set
-        return None
-    @staticmethod
     def build(p):
         p = p.braces()
 
@@ -2250,7 +2202,7 @@ class Dict(Expr):
             p.token(':')
             val = p.expression()
             kv = KVPair(key,val)
-            body = p.identify_build_node(Comprehension,kv)
+            body = p.build_node(Comprehension,kv)
             p.assert_empty()
             return Dict(body)
 
@@ -2267,33 +2219,9 @@ class Dict(Expr):
         def key_datum_list():
             return Dict(p.comma_list(kv_pair,dict_expansion))
 
-        return p.logical_or(comprehension,key_datum_list)
+        return p.logical_xor(comprehension,key_datum_list)
 
 
-# key:val or key=val
-class KVPair(SynNode):
-    def __init__(self,key,val):
-        self.key = key
-        self.val = val
-
-
-"""
-This is a slight modification (eg comp_for is not recursive) but it actually has the same meaning as the LRM version.
-comprehension ::= Expr comp_for (comp_for | comp_if)*
-comp_for  = [async] for target_list in or_test
-comp_if = if expr_nocond
-"""
-
-class CompIf(SynNode):
-    def __init__(self,cond,comp_iter):
-        self.cond = cond
-        self.comp_iter = comp_iter
-
-class CompFor(SynNode):
-    def __init__(self,targets,iter,comp_iter):
-        self.targets = targets
-        self.iter = iter
-        self.comp_iter = comp_iter
 
 """
 The iterable expression in the leftmost for clause is evaluated directly in the enclosing scope and then passed as an argument to the implictly nested scope. Subsequent for clauses and any filter condition in the leftmost for clause cannot be evaluated in the enclosing scope as they may depend on the values obtained from the leftmost iterable. For example: [x*y for x in range(10) for y in range(x, x+10)].
@@ -2303,11 +2231,6 @@ class Comprehension(Expr):
     def __init__(self,leftmost_for,for_if_list):
         super().__init__()
         self.comp_for = comp_for
-    @staticmethod
-    def identify(p):
-        if p.keyword('for') or p.keyword('async'):
-            return Comprehension
-        return None
     @staticmethod
     def build(lhs_node,p):
         comp_for = p.comp_for()
@@ -2330,49 +2253,43 @@ if you see a "," and are trying to expand via left recursion and ur not a
 
 class Tuple(InitExpr):
     def init(self,vals):
-        self.vals = vals
+        self.vals = vals # [] for empty tuple
 
 class Ellipsis(Expr):
     def __init__(self):
         super().__init__()
     @staticmethod
-    def identify(elems):
-        if token(elems,'...',fail=BOOL):
-            return Ellipsis
-        return None
-    @staticmethod
-    def build(elems):
-        return Ellipsis(),elems[1:]
+    def build(p):
+        p.token('...'):
+        return Ellipsis()
 
 @left_recursive
 class Ternary(Expr):
-    def __init__(self,cond,if_branch,else_branch):
+    """
+    conditional_expression ::=  or_test ["if" or_test "else" expression]
+    """
+    def __init__(self,cond,if_val,else_val):
         super().__init__()
-        self.cond=cond
-        self.if_branch=if_branch
-        self.else_branch=else_branch
+        self.cond = cond
+        self.if_val = if_val
+        self.else_val = else_val
     @staticmethod
-    def identify(elems):
-        if keyword(elems,'if',fail=BOOL):
-            return Ternary
-        return None
-    @staticmethod
-    def build(lhs_node,elems):
-        elems = keyword(elems,'if')
-        cond,elems = expr(elems)
-        elems = keyword(elems,'else')
-        else_branch,elems = expr(elems)
-        return Ternary(cond,lhs_node,else_branch),elems
+    def build(p,leftnode):
+        p.keyword('if')
+        cond = p.or_test()
+        p.keyword('else')
+        else_val = p.expression()
+        return Ternary(cond,leftnode,else_val)
+
 class Lambda(Expr):
+    """
+    lambda_expr        ::=  "lambda" [parameter_list] ":" expression
+    lambda_expr_nocond ::=  "lambda" [parameter_list] ":" expression_nocond
+    """
     def __init__(self,args,body):
         super().__init__()
         self.args = args
         self.body = body
-    @staticmethod
-    def identify(elems):
-        if keyword(elems,'lambda',fail=BOOL):
-            return Lambda
-        return None
     @staticmethod
     def build(p,nocond=False):
         p.keyword('lambda')
@@ -2383,31 +2300,38 @@ class Lambda(Expr):
             body = p.expresssion()
         return Lambda(args,body)
 
-#        elems = keyword(elems,'lambda')
-#        sp = unsafe_split(elems,':',mode='first')
-#        args_elems = sp[0]
-#        args = Formals(args_elems)
-#        elems = join(sp[1:])
-#        # note that annotations are not allowed in lambda expressions. This is probably because the colon would make them impossible to parse in some cases since it's not necessarily embedded in any parentheses nclude <math.h>or anything. Therefore I should be fine to just use split()[0] to get the arguments.
-#        body,elems = expr(elems)
-#        return Lambda(args,body),elems
-
-class Yield(Expr):
+# There's YieldExpr YieldAtom (also an Expr) and YieldStmt
+class YieldExpr(Expr):
     """
-    | yield from Expr
-    | yield Expr
+    yield_expression ::=  "yield" [expression_list | "from" expression]
     """
     def __init__(self,val,from):
         super().__init__()
         self.val = val
         self.from = from
     @staticmethod
-    def build(elems):
-        elems = keyword(elems,'yield')
-        status,elems = keyword(elems,'from',fail=FAIL)
-        from = (status != FAIL)
-        val,elems = expr(elems)
-        return Yield(val,from),elems
+    def build(p):
+        p.keyword('yield')
+        has_from = p.or_false.keyword('yield')
+        from = e.expression() if has_from else None
+        return Yield(val,from)
+
+class YieldAtom(Expr):
+    """
+    yield_atom       ::=  "(" yield_expression ")"
+    """
+    def __init__(self,expr):
+        super().__init__()
+        self.expr = expr
+    @staticmethod
+    def build(p):
+        p = p.parens()
+        expr = p.build_node(YieldExpr)
+        p.assert_empty()
+        return expr
+
+
+
 
 class ParenForm(SynExpr):
     """
@@ -2426,7 +2350,7 @@ class ParenForm(SynExpr):
         if len(body) == 1 and p.elems[-1].typ != COMMA:
             return body[0] # eval to the single expression in the list
 
-        return Tuple(body)
+        return Tuple(body) # includes len==0 empty tuple case
 
 
 
@@ -2535,7 +2459,7 @@ class UnopL(Expr):pass
             return unopl_subclass[elems[0].typ]
         return None
     @staticmethod
-    def build(elems):
+    def build(p):
         op = elems[0].typ
         cls = unopl_subclass(op)
         val,elems = expr(elems[1:],leftnodeclass=cls)
@@ -2567,7 +2491,7 @@ class UnopR(Expr):
             return Slice
         return None
     @staticmethod
-    def build(lhs_node,elems):
+    def build(p,leftnode):
         if token(elems,'.',fail=BOOL):
             # Attr
             elems = token(elems,'.')
@@ -2671,7 +2595,7 @@ class Binop(Expr):
     def identify(p):
         if p.or_false.token(BINOPS):
             return binop_subclass[p.tok.typ]
-        return None
+        raise SyntaxError
     @classmethod
     def gen_build(cls,type,rhstype):
         @staticmethod
