@@ -17,17 +17,14 @@ TODO
 -add the blank-to-None conversion for special cases like return stmts -- thats prob in the Return syntax already
 -add autoinserted return None stmt at the end of fns
 -make build(p,leftnode) to format
--write tok_of_tok_like() -- should be easy just use .data
--removing GATHER i guess?
 -Improve Lit parsing to cover all cases
 -Imporve Var parsing to cover all cases
--.assert_empty() instead of .assert_empty()
--ensure all super().__init__() calls are done
 -ensure `p` not `elems` everywhere
 -replace keyword_arg() with KVPair stuff
--make or_expr() etc take left= optionally etc for rest
 -verifying that leftnode has the right type for each thing?? like in Compare you could have it make sure its an 'or_expr' to the left?
 -maybe have token() return a Tok to make stuff like Compare better
+
+-(again at end) ensure all super().__init__() calls are done
 
 -add loc_tagged stuff using the decorator i think i wrote and phone notes
 
@@ -145,6 +142,7 @@ def locate(fn):
 
 class Parser():
     def __init__(self,elems):
+        super().__init__()
         self.elems = elems # list of Tokens/Atoms
         self.idx = 0
         #self.bool = BoolCallWrapper(self)
@@ -170,17 +168,20 @@ class Parser():
     def token(self,tok_like):
         """
         Return True if curr tok is `tok_like`, else raise SyntaxError
-        Note that `True` is just returned so it can be used with .or_none
+        Note that `True` is just returned so it can be used with .or_false
         Step forward on success
         `tok_like` can be:
-            str: for example '(' becomes RPAREN
-            CONSTANT: like RPAREN
+            str: for example '(' is the same as RPAREN. To be specific the str should equal self.tok.data
+            CONSTANT: e.g. RPAREN
             list: a list of strs/CONSTANTs, and if any of them matches it succeeds. BINOPS is an example list.
         """
-        tok = tok_of_tok_like(tok_like)
-        if self.tok.typ == tok:
-            self.next()
-            return True
+        if not isinstance(tok_like,(list,tuple)):
+            tok_like = [tok_like] # wrap in a list
+        for tok_or_str in tok_like:
+            assert isinstance(tok_or_str,(str,CONSTANT))
+            if self.tok.typ == tok_or_str or self.tok.data == tok_or_str:
+                self.next()
+                return True
         raise SyntaxError(f"Failed to match token. Wanted: {tok} Got: {self.tok}")
     def keyword(self,kw):
         """
@@ -399,11 +400,12 @@ class Parser():
         node = self.logical_xor(*non_recursive) # this can throw synerr
 
         # left-recursion to extend this lefthand expression as much as possible
+        ty = trunk_type_of_node(node)
         while True:
             # populate `left_recursive` for use with logical_or()
             left_recursive = []
             for cls in nodeclasses:
-                if nodeclass.left_recursive:
+                if nodeclass.left_recursive and ty in nodeclass.left_types:
                     def fn():
                         return self.build_node(cls,leftnode=node) # <- key difference is leftnode
                     non_recursive.append(fn)
@@ -440,6 +442,7 @@ class OptionalCallWrapper:
     Return normal result if success, return FAIL if failure and reset the tokenstream to where it was at the start of the call.
     """
     def __init__(self,parser,retval):
+        super().__init__()
         self.parser = parser
         self.retval = retval
     def __getattr__(self,key):
@@ -459,6 +462,7 @@ class NotNoneCallWrapper:
     If the fn returns a SyntaxError is avoids this and nothing happens (intentionally)
     """
     def __init__(self,parser):
+        super().__init__()
         self.parser = parser
     def __getattr__(self,key):
         fn = getattr(self.parser,key)
@@ -474,6 +478,7 @@ class AssertCallWrapper:
     SyntaxError fi return value is not False and is not None
     """
     def __init__(self,parser):
+        super().__init__()
         self.parser = parser
     def __getattr__(self,key):
         fn = getattr(self.parser,key)
@@ -1017,20 +1022,25 @@ note: don't worry if you see stuff like ABracket being translated into a dict al
 """
 
 
-# class decorator
-def left_recursive(cls):
-    cls.left_recursive = True
-    return cls
+# class decorator that takes an argument
+def left_recursive(left_type):
+    """
+    left_type is the trunk type of the left hand expression that it is valid for us to expand on.
+    """
+    def class_decorator(cls):
+        cls.left_recursive = True
+        cls.left_types = get_trunk_types(left_type) if left_type is not None else None
+        return cls
+    return class_decorator
 
-# class decorator
-# defines a gathers() method that returns true if called with one of the classes originally passed into the decorator (in `gatherable_classes`)
-def gathers(*gatherable_classes):
-    def aux(cls):
-        cls.gathers = (lambda other_cls: other_cls in gatherable_classes)
-    return aux
 
 class Expr(Node):
     left_recursive = False # gets set to True by @left_recursive decorator
+    left_types = None # gets set by @left_recursive decorator
+    def __init__(self):
+        super().__init__()
+        if self.left_recursive:
+            assert self.left_type is not None, f"You need to left_recursive decorate your subclass of a left_recursive(None) node! {self}"
 
     @staticmethod
     def identify(p):
@@ -1059,18 +1069,41 @@ It can't be `a ::= 'if' b` or `a ::= '(' b ')'` or anything else like that, it h
 
 """
 def get_trunk_nodes(type):
+    """
+    Takes a type like 'primary' and returns all node classes from that type and all types within it, all in a flattened list.
+    """
     assert type in trunk
     idx = trunk_nodes.keys().index(type)
     list_of_tuples = trunk_nodes.values()[:idx+1]
     flattened = itertools.chain(*list_of_tuples)
     return flattened
 
+def get_trunk_types(type):
+    """
+    Takes a type like 'primary' and returns all types within it like ['enclosure','atom','primary']
+    """
+    assert type in trunk
+    idx = trunk_nodes.keys().index(type)
+    types = trunk_nodes.keys()[:idx+1]
+    return types
+
+def trunk_type_of_node(node):
+    """
+    Takes a Node instance and returns its trunk type
+    """
+    assert isinstance(node,Node)
+    for type,cls_list in trunk_nodes.items():
+        for cls in cls_list:
+            if isinstance(node,cls):
+                return type
+
 
 trunk_nodes = {
         'enclosure':List,Dict,Set,GeneratorExpr,YieldAtom,ParenForm # tightest binding
         'atom':Var,Lit
         'primary':Attr,Subscript,Slice,Call
-        'power':Exp,AwaitExpr,
+        'await_or_primary':AwaitExpr
+        'power':Exp,
         'u_expr':UAdd,USub,Invert
         'm_expr'Mul,Div,FloorDiv,Mod,MatMul
         'a_expr':Add,Sub
@@ -1383,6 +1416,7 @@ Loc = namedtuple('Loc', 'start end')
 
 class LocTagged:
     def __init__(self):
+        super().__init__()
         self.loc = Pos(Loc(None,None),Loc(None,None))
         self.finished = False
     def loc_start(self,other):
@@ -1449,6 +1483,7 @@ def empty(): pass # assert that the elem list given is empty, if not throw an er
 
 class Stmt(Node): # abstract
     def __init__(self):
+        super().__init__()
         self.dependent = False
     def offer_neighbor(self, stmt):
         """
@@ -1473,6 +1508,7 @@ class FuncDef(CompoundStmt):
 
 class Module(CompoundStmt):
     def __init__(self,compound):
+        super().__init__()
         self.body = stmts(compound.body)
 
 class ClassDef(CompoundStmt):
@@ -1521,9 +1557,11 @@ def keyword_arg(elems): # [elems] -> KeywordArg,[elems] (or boolean if BOOL, etc
 
 class Arg(SynNode):
     def __init__(self,name):
+        super().__init__()
         self.name = name
 class KeywordArg(SynNode):
     def __init__(self,name,val):
+        super().__init__()
         self.name = name
         self.val = val
 
@@ -1780,6 +1818,7 @@ class If(CompoundStmt):
 class CONSTANT:
     instances = []
     def __init__(self,name,**kwargs):
+        super().__init__()
         self.name=name
         for k,v in kwargs.items():
             assert k != 'name'
@@ -1894,6 +1933,7 @@ class With(CompoundStmt):
         self.body = stmts(compound.body)
 class Withitem(SynNode):
     def __init__(self,contextmanager,target):
+        super().__init__()
         self.contextmanager = contextmanager
         self.target = target
 class Try(CompoundStmt):
@@ -1992,6 +2032,7 @@ class Import(SimpleStmt):
 
 class Importitem(SynNode):
     def __init__(self,var,alias):
+        super().__init__()
         self.var=var
         self.alias=alias
 class Break(SimpleStmt):
@@ -2091,6 +2132,7 @@ class Assert(SimpleStmt):
 # EXPRS
 class Targetable:
     def __init__(self,elems,**kw):
+        super().__init__()
         assert isinstance(self,Expr)
         if 'usage' not in kw:
             raise InheritanceError("{self} is a Targetable object and must be called with the 'usage' kwarg")
@@ -2135,16 +2177,19 @@ class DoubleStarred(InitExpr):
 ## SYN NODES
 class KVPair(SynNode):
     def __init__(self,key,val):
+        super().__init__()
         self.key = key
         self.val = val
 
 class CompIf(SynNode):
     def __init__(self,cond,comp_iter):
+        super().__init__()
         self.cond = cond
         self.comp_iter = comp_iter
 
 class CompFor(SynNode):
     def __init__(self,targets,iter,comp_iter):
+        super().__init__()
         self.targets = targets
         self.iter = iter
         self.comp_iter = comp_iter
@@ -2226,7 +2271,7 @@ class Dict(Expr):
 """
 The iterable expression in the leftmost for clause is evaluated directly in the enclosing scope and then passed as an argument to the implictly nested scope. Subsequent for clauses and any filter condition in the leftmost for clause cannot be evaluated in the enclosing scope as they may depend on the values obtained from the leftmost iterable. For example: [x*y for x in range(10) for y in range(x, x+10)].
 """
-@left_recursive
+@left_recursive('expression')
 class Comprehension(Expr):
     def __init__(self,leftmost_for,for_if_list):
         super().__init__()
@@ -2253,6 +2298,7 @@ if you see a "," and are trying to expand via left recursion and ur not a
 
 class Tuple(InitExpr):
     def init(self,vals):
+        super().__init__()
         self.vals = vals # [] for empty tuple
 
 class Ellipsis(Expr):
@@ -2263,7 +2309,7 @@ class Ellipsis(Expr):
         p.token('...'):
         return Ellipsis()
 
-@left_recursive
+@left_recursive('or_test')
 class Ternary(Expr):
     """
     conditional_expression ::=  or_test ["if" or_test "else" expression]
@@ -2422,43 +2468,53 @@ class Lit(Expr):
         if p.or_false.quote():
             return Str
         return None
+class Num(Lit):pass
+class Int(Num):
     @staticmethod
     def build(p):
-        if p.or_false.token(INTEGER):
-            return Int(int(p.tok.data))
-        if p.or_false.token(FLOAT):
-            return Float(float(p.tok.data))
-        if p.or_false.token(COMPLEX):
-            return Complex(complex(p.tok.data))
-        if p.or_false.token(BYTES):
-            return Bytes(bytes(p.tok.data))
+        p.token(INTEGER)
+        return Int(int(p.tok.data))
+class Float(Num):
+    @staticmethod
+    def build(p):
+        p.token(FLOAT)
+        return Float(float(p.tok.data))
+class Complex(Num):
+    @staticmethod
+    def build(p):
+        p.token(COMPLEX):
+        return Complex(complex(p.tok.data))
+class Bytes(Lit):
+    @staticmethod
+    def build(p):
+        p.token(BYTES):
+        return Bytes(bytes(p.tok.data))
+class NamedConstant(Lit):
+    @staticmethod
+    def build(p):
         if p.or_false.keyword('True'):
             return NamedConstant(True)
         if p.or_false.keyword('False'):
             return NamedConstant(False)
-        if p.or_false.keyword('None'):
-            return NamedConstant(None)
-        if p.or_false.quote():
-            return Str(p.tok.data)
-        return None
-class Num(Lit):pass
-class Int(Num):pass
-class Float(Num):pass
-class Complex(Num):pass
-class Str(Lit):pass
-class Bytes(Lit):pass
-class NamedConstant(Lit):pass
+        p.keyword('None') # can throw synerr
+        return NamedConstant(None)
+class Str(Lit):
+    @staticmethod
+    def build(p):
+        p.quote():
+        return Str(p.tok.data)
 
-class UnopL(Expr):pass
+class UnopL(Expr):
     def __init__(self,val):
         super().__init__()
         self.val = val # no need to include `op` bc thats captured by subclass
     @staticmethod
-    def identify(elems):
-        if token(elems,UNOPSL,fail=BOOL):
-            return unopl_subclass[elems[0].typ]
-        return None
-    @staticmethod
+    def identify(p):
+        if p.or_false.token(UNOPSL):
+            return unopl_subclass[p.tok.typ]
+        raise SyntaxError
+    @classmethod
+    def gen_build(cls,type):
     def build(p):
         op = elems[0].typ
         cls = unopl_subclass(op)
@@ -2585,7 +2641,7 @@ boolop_subclass = {
 
 
 
-@left_recursive
+@left_recursive(None) # forces all children to do left_recursive(actual_type)
 class Binop(Expr):
     def __init__(self,lhs,rhs):
         super().__init__()
@@ -2597,61 +2653,76 @@ class Binop(Expr):
             return binop_subclass[p.tok.typ]
         raise SyntaxError
     @classmethod
-    def gen_build(cls,type,rhstype):
+    def gen_subclass(cls,rhstype):
         @staticmethod
         def build(p,leftnode):
-            rightnode = p.trunk_expr(rhstype,left=type)
+            rightnode = p.trunk_expr(rhstype)
             return cls(leftnode,rightnode)
         cls.build = build
 
 # a_expr
+@left_recursive('a_expr')
 class Add(Binop):pass
-Add.gen_build('a_expr','m_expr')
+Add.gen_build('m_expr')
+@left_recursive('a_expr')
 class Sub(Binop):pass
-Sub.gen_build('a_expr','m_expr')
+Sub.gen_build('m_expr')
 
 # m_expr
+@left_recursive('m_expr')
 class Mul(Binop): pass
-Mul.gen_build('m_expr','u_expr')
+Mul.gen_build('u_expr')
+@left_recursive('m_expr')
 class MatMul(Binop): pass
-MatMul.gen_build('m_expr','m_expr')
+MatMul.gen_build('m_expr')
+@left_recursive('m_expr')
 class FloorDiv(Binop): pass
-FloorDiv.gen_build('m_expr','u_expr')
+FloorDiv.gen_build('u_expr')
+@left_recursive('m_expr')
 class Div(Binop): pass
-Div.gen_build('m_expr','u_expr')
+Div.gen_build('u_expr')
+@left_recursive('m_expr')
 class Mod(Binop): pass
-Mod.gen_build('m_expr','u_expr')
+Mod.gen_build('u_expr')
 
 # shift_expr
+@left_recursive('shift_expr')
 class ShiftL(Binop): pass
-ShiftL.gen_build('shift_expr','a_expr')
+ShiftL.gen_build('a_expr')
+@left_recursive('shift_expr')
 class ShiftR(Binop): pass
-Mod.gen_build('shift_expr','a_expr')
+Mod.gen_build('a_expr')
 
 # and_expr
+@left_recursive('and_expr')
 class BitAnd(Binop): pass
-BitAnd.gen_build('and_expr','shift_expr')
+BitAnd.gen_build('shift_expr')
 
 # xor_expr
+@left_recursive('xor_expr')
 class BitXor(Binop): pass
-BitXor.gen_build('xor_expr','and_expr')
+BitXor.gen_build('and_expr')
 
 # or_expr
+@left_recursive('or_expr')
 class BitOr(Binop): pass
-BitOr.gen_build('or_expr','xor_expr')
+BitOr.gen_build('xor_expr')
 
 # TODO make sure left=power is correct
 # power
+@left_recursive('await_or_primary')
 class Exp(Binop): pass
-BitOr.gen_build('power','u_expr')
+BitOr.gen_build('u_expr')
 
 # and_test
+@left_recursive('and_test')
 class And(Binop):pass
-And.gen_build('and_test','not_test')
+And.gen_build('not_test')
 
 # or_test
+@left_recursive('or_test')
 class Or(Binop):pass
-Or.gen_build('or_test','and_test')
+Or.gen_build('and_test')
 
 @left_recursive
 @gathers(Compare)
