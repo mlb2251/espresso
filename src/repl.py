@@ -138,13 +138,14 @@ class Context:
             u.gray(f"input_from_file called")
             self.line_idx += 1
             if self.line_idx >= len(self.lines):
-                u.gray(f"Context switch: {self.infile} -> {self.prev_context.infile}")
+                u.gray(f"Context switch: {self.prev_context.infile} -> {self.infile}")
                 self.repl.context = self.prev_context
                 self.repl.mode = self.old_mode # reset mode as exiting this context. Then again, it'll always be normal mode that calls `use` statements
                 if self.repl.context == None:
                     u.gray('Final context ended, exit()ing')
                     exit(0)
-                return self.repl.context.input(banner) # smoothly transition into the next input source
+                self.repl.update_banner()
+                return self.repl.context.input(self.repl.banner) # smoothly transition into the next input source
             line = self.lines[self.line_idx]
             print(f"compiling:{line}")
             return line
@@ -165,6 +166,7 @@ class Context:
                 u.r(f"failed to open file {infile} for Context creation")
                 return
         repl.context = self
+
     def input(self):
         u.r("SHOULD HAVE BEEN OVERWRITTEN") # is overwritten in __init__
 
