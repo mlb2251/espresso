@@ -54,7 +54,7 @@ def get_arguments():
     parser.add_argument('infile', nargs='?', default=None, type=str, help='The optional input file')
     parser.add_argument('--debug', action='store_true', default=False,
             help='Enables full debugging from startup (equivalent to running !debug as first command)')
-    parser.add_argument('--repl', action='store_true', default=False,
+    parser.add_argument('-i', dest="repl", action='store_true', default=False,
             help='Only useful when infile is provided, in which case this forces the parser to drop into a repl after executing the file')
 #    parser.add_argument('--stable', action='store_true', default=False,
 #            help='Switch global system to use stable espresso and quit')
@@ -113,7 +113,7 @@ def do_repl(config):
     # initialize the repl
     if config.infile is not None:
         if not os.path.isfile(config.infile):
-            os.r(f'file {config.infile} not found')
+            u.r(f'file {config.infile} not found')
             exit(1)
     the_repl = repl.Repl(config)
 
