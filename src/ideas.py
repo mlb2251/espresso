@@ -1,5 +1,9 @@
 
 
+## use this instead. It sticks with the AColonList invariant of python, and it's very minimal, and it makes a lot of sense
+x =:
+    x + 2
+
 
 ## note everything with `compiled` is just initial ideas, same with abstract data types, so think abt them more before concluding anything!
 def gcd(a,b):

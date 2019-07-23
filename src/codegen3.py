@@ -12,6 +12,7 @@ keywords = set(kwlist)
 """
 
 TODO
+-Remake stmts, and decorate them all with
 -`Not` shd not be in UnopL bc of precedence
 -comp_for needs internal recursion as in LRM bc its used in generators too so unless you wanna track dependencies you gotta go verbatim
 -add the blank-to-None conversion for special cases like return stmts -- thats prob in the Return syntax already
@@ -19,10 +20,20 @@ TODO
 -make build(p,leftnode) to format
 -Improve Lit parsing to cover all cases
 -Imporve Var parsing to cover all cases
--ensure `p` not `elems` everywhere
--replace keyword_arg() with KVPair stuff
--verifying that leftnode has the right type for each thing?? like in Compare you could have it make sure its an 'or_expr' to the left?
+-Figure out how Annotated class should work. Ofc it should basically be a Var. It should be able to wrap anything in the future i suppose. So maybe it should just be a fundamental part of a Node's label. These hard-annotations are done by the user and soft-annotations are figured out by the parser. HMMM but ok, right now annotations in python only apply to functions (we should maintain that but also allow it for certain other cases like assignment or perhapppps standalone / in a tuple x:int,y:int or even x,y:int as stmts. Basically a typehint stmt)
+-note that .annotate() cant be used on strings, making Var more convenient to use widely. If a string needs annotation it should be a Var instead.
+-Keep KeywordArg, and extend Arg to have an optional default
+    Arguments -> .args .kwargs
+    Arg
+    KVPair (ie kwargs)
+    Parameters -> .args .kwonlyargs .stararg(str|''|None) .doublestararg
+        If you want to find defaulted ones easy just do a quick filter. We don't do it for you, that unnecessary.
+    Arg
+    KVPair (ie defaulted args)
+
 -maybe have token() return a Tok to make stuff like Compare better
+-Args and Formals probably want to be rewritten as __init__(etc etc etc) and build(p) so that they can be instantiated without parser.
+
 
 -(again at end) ensure all super().__init__() calls are done
 
@@ -35,6 +46,17 @@ if Expr has .identify then run that to get the subclass (recursive) and when you
 
 
 Starred and DoubleStarred InitExpr's are used to wrap nodes in stars
+
+
+
+Docs:
+
+_tokenize: (str with no newlines)->
+
+
+
+
+
 
 
 
@@ -165,6 +187,28 @@ class Parser():
         if self.idx >= len(self.elems):
             raise SyntaxError("Ran out of elems to consume")
         return self.elems[self.idx]
+    def comma_sep(self,fn):
+        """
+        Decorator that calls fn() then consumes a comma if parser is not empty (ie covers the trailing comma case)
+        """
+        def wrapped():
+            ret = fn()
+            if not p.empty():
+                p.token(',') # may SynErr, causing rollback to before fn()
+            return ret
+        return wrapped
+
+    def loop(self,fn):
+        """
+        Decorator that calls fn() in a loop and returns a list of the results. List is empty if first call fails.
+        """
+        ret = []
+        while True:
+            try:
+                ret.append(fn())
+            except SyntaxError:
+                break
+        return ret
     def token(self,tok_like):
         """
         Return True if curr tok is `tok_like`, else raise SyntaxError
@@ -232,7 +276,7 @@ class Parser():
             self.idx = idx
     ## BNF TYPES
     def parameter_list(self,no_annotations=False):
-        pass
+        return self.build_node(Parameters,no_annotations=no_annotations)
     def expression_list(self):
         return p.comma_list(p.expression)
     def expression_nocond():
@@ -303,23 +347,32 @@ class Parser():
             return e
 
         return self.logical_xor(parens_or_brackets,starred,primary_subtype)
-
-    def parens(p):
-        if not isinstance(p.tok,AParen):
-            raise SyntaxError("Attempting to parse parens when none found")
-        return Parser(p.tok.body)
-    def quote(p):
-        if not isinstance(p.tok,AQuote):
-            raise SyntaxError("Attempting to parse quotes when none found")
-        return Parser(p.tok.body)
-    def brackets(p):
-        if not isinstance(p.tok,ABracket):
-            raise SyntaxError("Attempting to parse brackets when none found")
-        return Parser(p.tok.body)
-    def brackets(p):
-        if not isinstance(p.tok,ABrace):
-            raise SyntaxError("Attempting to parse braces when none found")
-        return Parser(p.tok.body)
+    def brackets(self):
+        return self._atom_body(ABracket)
+    def braces(self):
+        return self._atom_body(ABrace)
+    def parens(self):
+        return self._atom_body(AParen)
+    def quotes(self):
+        return self._atom_body(AQuote)
+    def brackets(self):
+        return self._atom_body(ABracket)
+    def colonlist(p):
+        return _atom_head_body(AColonList)
+    def argument_list(self):
+        return self.build_node(Arguments)
+    def _atom_body(self,atom_cls):
+        if not isinstance(p.tok,atom_cls):
+            raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
+        ret = Parser(p.tok.body)
+        p.next()
+        return ret
+    def _atom_head_body(self,atom_cls):
+        if not isinstance(p.tok,atom_cls):
+            raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
+        ret = Parser(p.tok.head),Parser(p.tok.body)
+        p.next()
+        return ret
     def target_list(p):
         return p.comma_list(p.target)
     ## META FNS
@@ -372,12 +425,12 @@ class Parser():
                 cls = nodeclass.not_none.identify(self) # may throw SyntaxError
             return self.not_none.build_node(cls,leftnode=leftnode,**kwargs)
         # non identify() case
-        if nodeclass.left_recursive:
+        if isinstance(nodeclass,Expr) and nodeclass.left_recursive:
             assert leftnode is not None
             node = nodeclass.build(self,leftnode=leftnode,**kwargs)
         else:
             assert leftnode is None
-            node = nodeclass.build(self)
+            node = nodeclass.build(self,**kwargs)
         assert node is not None, f"{nodeclass}.build returned None"
         return node
     def trunk_expr(self, type):
@@ -393,9 +446,9 @@ class Parser():
         non_recursive = []
         for cls in nodeclasses:
             if not nodeclass.left_recursive:
-                def fn():
+                def build_fn():
                     return self.build_node(cls)
-                non_recursive.append(fn)
+                non_recursive.append(build_fn)
 
         node = self.logical_xor(*non_recursive) # this can throw synerr
 
@@ -406,9 +459,9 @@ class Parser():
             left_recursive = []
             for cls in nodeclasses:
                 if nodeclass.left_recursive and ty in nodeclass.left_types:
-                    def fn():
+                    def build_fn():
                         return self.build_node(cls,leftnode=node) # <- key difference is leftnode
-                    non_recursive.append(fn)
+                    non_recursive.append(build_fn)
 
 
             node_or_none = self.or_none.logical_xor(*non_recursive)
@@ -445,6 +498,18 @@ class OptionalCallWrapper:
         super().__init__()
         self.parser = parser
         self.retval = retval
+    def __call__(self,fn):
+        """
+        For use as a decorator
+        """
+        def wrapper(*args,**kwargs):
+            idx = self.parser.idx
+            try:
+                return fn(*args,**kwargs)
+            except SyntaxError:
+                self.parser.idx = idx
+                return self.retval
+        return wrapper
     def __getattr__(self,key):
         fn = getattr(self.parser,key)
         def wrapper(*args,**kwargs):
@@ -937,77 +1002,48 @@ def get_leading_keyword(elems):
         return None
     return x.data
 
+"""
+Note the advanced class decorator they suggested is not great.
+A better one would just be a fn that replaces Foo.fn = thedecorator(Foo.fn) instead of crazy getattribute stuff. It can use types to figure out what attrs are functions.
+"""
 
+def stmt(self):
+    """
+    Same deal as trunk_expr have something like an @decorator for labelling class with a keyword
+    """
+    if isinstance(self.tok,AColonList):
+        # compound statement
+        potential_kw = self.tok.head[0]
+        kw = None if potential_kw.typ is not KEYWORD else potential_kw.data
+        classes = compound_stmt_nodes[kw]
+    else:
+        # simple statement
+        potential_kw = self.tok
+        kw = None if potential_kw.typ is not KEYWORD else potential_kw.data
+        classes = simple_stmt_nodes[kw]
 
-def stmt(elems):
-    is_compound = (len(elems) == 1 and isinstance(elems[0],AColonList))
-    # compound statement
-    if is_compound:
-        compound = elems[0] # compound is an AColonList
-        kw = get_leading_keyword(compound.head)
-        if kw is not None:
-            if kw == 'def':
-                return FuncDef(compound)
-            if kw == 'if':
-                return If(compound)
-            if kw == 'for':
-                return For(compound)
-            if kw == 'while':
-                return While(compound)
-            if kw == 'class':
-                return ClassDef(compound)
-            if kw == 'with':
-                return With(compound)
-            if kw == 'try':
-                return Try(compound)
-            if kw == 'except':
-                return Except(compound)
-            if kw == 'elif':
-                return Elif(compound)
-            if kw == 'else':
-                if get_leading_keyword(compound.head[1:]) == 'if':
-                    return Elif(compound)
-                return Else(compound)
+    if len(classes) == 0:
+        raise SyntaxError(f"No valid classes found for leading keyword {potential_kw}"
 
-            raise SyntaxError(f"Improper placement for '{kw}' keyword")
-        raise SyntaxError(f"Unrecognized start to a colon block")
-    # simple statement
-    kw = get_leading_keyword(elems)
-    if kw is not None:
-        if kw == 'return':
-            return Return(elems)
-        if kw == 'pass':
-            return Pass(elems)
-        if kw == 'raise':
-            return Raise(elems)
-        if kw in ['import','from']:
-            return Import(elems)
-        if kw == 'break':
-            return Break(elems)
-        if kw == 'continue':
-            return Continue(elems)
-        if kw == 'del':
-            return Delete(elems)
-        if kw == 'assert':
-            return Assert(elems)
-        if kw == 'global':
-            return Global(elems)
-        if kw == 'nonlocal':
-            return Nonlocal(elems)
-        raise SyntaxError(f"Improper placement for '{kw}' keyword")
-    # simple statements that don't start with keywords
-    e, rest = expr(elems)
-    # ExprStmt
-    if rest == []:
-        return ExprStmt(elems) # to make a .identify for this probably just have it run .expr_assert_empty with fail=BOOL or whatever
-    # Asn
-    if istoken(rest,0,EQ):
-        return Asn(elems)
-    # AugAsn
-    if istoken(rest,0,BINOPS) and istoken(rest,1,EQ):
-        return AugAsn(elems)
-    raise SyntaxError(f"Unrecognized statment where first token is not a keyword and after parsing the first section as an expression the first token of the remainder is not EQ nor in BINOPS followed by EQ so it can't be Asn nor AugAsn.\nFirst expr parsed:{e}\nRest:{rest}")
+    build_fns = []
+    for cls in classes:
+        def build_fn():
+            return self.build_node(cls)
+        build_fns.append(build_fn)
 
+    return p.logical_xor(*build_fns)
+
+#    # simple statements that don't start with keywords
+#    e, rest = expr(elems)
+#    # ExprStmt
+#    if rest == []:
+#        return ExprStmt(elems) # to make a .identify for this probably just have it run .expr_assert_empty with fail=BOOL or whatever
+#    # Asn
+#    if istoken(rest,0,EQ):
+#        return Asn(elems)
+#    # AugAsn
+#    if istoken(rest,0,BINOPS) and istoken(rest,1,EQ):
+#        return AugAsn(elems)
 
 def expr_assert_empty(*args,**kwargs):
     *ignore,elems = expr(*args,**kwargs)
@@ -1028,29 +1064,56 @@ def left_recursive(left_type):
     left_type is the trunk type of the left hand expression that it is valid for us to expand on.
     """
     def class_decorator(cls):
+        assert isinstance(cls,Expr)
         cls.left_recursive = True
         cls.left_types = get_trunk_types(left_type) if left_type is not None else None
         return cls
     return class_decorator
 
+from collections import defaultdict
+simple_stmt_nodes = defaultdict(list)
+compound_stmt_nodes = defaultdict(list)
+# `None` is the key for no leading kw
+
+# class decorator for Stmts
+def simple(*kws):
+    """
+    `kw` is the leading keyword for the Stmt subclass this is decorating
+    """
+    def class_decorator(cls):
+        assert isinstance(cls,Stmt)
+        cls.leading_kws = kws
+        cls.type = 'simple'
+        [simple_stmt_nodes[kw].append(cls) for kw in kws]
+    return class_decorator
+
+# class decorator for Stmts
+def compound(*kws):
+    """
+    `kw` is the leading keyword for the Stmt subclass this is decorating. None if theres no leading kw
+    """
+    def class_decorator(cls):
+        assert isinstance(cls,Stmt)
+        cls.leading_kws = kws
+        cls.type = 'compound'
+        [compound_stmt_nodes[kw].append(cls) for kw in kws]
+        return cls
+    return class_decorator
+
+class Stmt(Node):
+    leading_kw = None # gets set to True by @leading_kw decorator if theres a leading keyword
 
 class Expr(Node):
     left_recursive = False # gets set to True by @left_recursive decorator
     left_types = None # gets set by @left_recursive decorator
+    annotation = None
     def __init__(self):
         super().__init__()
         if self.left_recursive:
             assert self.left_type is not None, f"You need to left_recursive decorate your subclass of a left_recursive(None) node! {self}"
-
-    @staticmethod
-    def identify(p):
-        """
-        Takes a Parser and returns a class
-        """
-        raise NotImplementedError
-    @staticmethod
-    def build(p): # left-recursive nodes take an additional parameter leftnode
-        raise NotImplementedError
+    def annotate(self,annotation):
+        self.annotation = annotation
+        return self
 
 # an Expr with no build/identify functions
 class InitExpr(Expr): pass
@@ -1059,8 +1122,6 @@ class SynExpr(Expr): pass
 # Syntatic Element. Things like Formals that are neither Exprs nor Stmts
 class SynNode(Node): pass
 
-# crfl this should only have the master classes in it like Binop not Add
-exprnodes []
 
 
 """
@@ -1491,27 +1552,31 @@ class Stmt(Node): # abstract
         """
         return False
 
-class CompoundStmt(Stmt): pass # abstract
-class SimpleStmt(Stmt): pass # abstract
-
 ## Stmts that take an AColonList as input
-class FuncDef(CompoundStmt):
-    def __init__(self,compound):
-        super().__init__()
-        head = compound.head
+@leading_kw('def')
+class FuncDef(Stmt):
+    def __init__(self,name,args,body):
+        self.name = name
+        self.args = args
+        self.body = body
+    @staticmethod
+    def build(p):
+        head,body = p.colonlist()
 
         head.keyword("def")
-        self.name = head.identifier()
-        self.args = Formals(head)
+        name = head.identifier()
+        args = head.formals()
         head.assert_empty()
-        self.body = stmts(compound.body)
+        body = body.stmts()
+        body.assert_empty()
+        return FuncDef(name,args,body)
 
-class Module(CompoundStmt):
+class Module(Stmt):
     def __init__(self,compound):
         super().__init__()
         self.body = stmts(compound.body)
 
-class ClassDef(CompoundStmt):
+class ClassDef(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1547,90 +1612,63 @@ class ClassDef(CompoundStmt):
 #    res.append(elems[prev_comma_idx+1:])
 #    return res
 
-# parses: identifier '=' Expr
-# not to be confused with keyword() which deals with language keywords
-# Note that it will parse using expr_sep(elems,',') since it takes a single expression rather than an expression_list and shouldnt be consuming any commas.
-def keyword_arg(elems): # [elems] -> KeywordArg,[elems] (or boolean if BOOL, etc)
-    raise NotImplementedError
-# TODO maybe valued_arg is a better name since it's used for defaults too? idk. Both Args and Formals use it
-
-
 class Arg(SynNode):
     def __init__(self,name):
         super().__init__()
         self.name = name
-class KeywordArg(SynNode):
-    def __init__(self,name,val):
-        super().__init__()
-        self.name = name
-        self.val = val
 
-class Args(SynNode):
-    def __init__(self,aparen_or_elem_list):
+class Arguments(SynNode):
+    def __init__(self,args):
+        self.args = args
+    @staticmethod
+    def build(p):
         super().__init__()
-        if isinstance(aparen_or_elem_list,AParen):
-            elems = aparen_or_elem_list.body
-        else:
-            elems = aparen_or_elem_list
-
-        self.args = []
-        self.starargs = []
-        self.doublestarargs = []
-        self.kwargs = []
 
         """
         There are 3 stages and there's no going backwards:
         1.Comma-sep list mix of Expr | *Expr
+            (Expr | *Expr) list
         2.As soons as an ident=Expr shows up, switch to a comma-sep list of (ident=Expr) | *Expr
+            ((ident=Expr) | *Expr) list
         3.As soon as a **Expr shows up, switch a comma-sep list of (ident=Expr) | **Expr
+            ((ident=Expr) | **Expr) list
         A trailing comma at the end is okay
         """
 
-        while not empty(elems,fail=BOOL):
-            # ident=Expr: Valid at any stage, shift to stage 2 if in stage 1
-            # *Expr: Valid at stage <=2, shift 1->2
-            # **Expr: Valid at any stage, shift to 3 always
-            # Expr: Valid at stage 1, no shift
-            if keyword_arg(elems,fail=BOOL):
-                if stage == 1:
-                    stage = 2
-                kwarg,elems = keyword_arg(elems)
-                self.kwargs.append(kwarg)
-            elif token(elems,'*',fail=BOOL):
-                if stage == 3:
-                    raise SyntaxError("Starred arg must go before all double-starred args")
-                elems = token(elems,'*',fail=BOOL)
-                argname = identifier(elems)
-                self.starargs.append(Arg(argname))
-            elif token(elems,'**',fail=BOOL):
-                stage = 3
-                elems = token(elems,'**',fail=BOOL)
-                argname = identifier(elems)
-                self.doublestarargs.append(Arg(argname))
-            elif identifier(elems,fail=BOOL):
-                if stage != 1:
-                    raise SyntaxError("normal arg must go before all keyword args and double-starred args")
-                argname,elems = identifier(elems)
-                self.args.append(Arg(argname))
-            else:
-                raise SyntaxError("Unable to parse argument {elems}")
-            # end of an arg
-            if empty(elems,fail=BOOL):
-                break
-            elems = token(elems,',')
-        return None # end of Args __init__
+        @p.loop @p.comma_sep
+        def stage1():
+            if p.or_false.token('*'):
+                return Starred(Arg(p.identifier()))
+            return Arg(p.identifier())
+        @p.loop @p.comma_sep
+        def stage2():
+            if p.or_false.token('*'):
+                return Starred(Arg(p.identifier()))
+            name = p.identifier()
+            p.token('=')
+            val = p.expression()
+            return KVPair(name,val)
+        @p.loop @p.comma_sep
+        def stage3():
+            if p.or_false.token('**'):
+                return DoubleStarred(Arg(p.identifier()))
+            name = p.identifier()
+            p.token('=')
+            val = p.expression()
+            return KVPair(name,val)
 
+        args = stage1() + stage2() + stage3()
+        return Arguments(args)
 
-
-
-class Formals(SynNode):
-    def __init__(self,aparen_or_elem_list):
+class Parameters(SynNode):
+    def __init__(self,args,stararg,kwonlyargs,doublestararg):
         super().__init__()
-        if isinstance(aparen_or_elem_list,AParen):
-            elems = aparen_or_elem_list.body
-        else:
-            elems = aparen_or_elem_list
-
+        self.args = args
+        self.stararg = stararg
+        self.kwonlyargs = kwonlyargs
+        self.doublestararg = doublestararg
+    @staticmethod
+    def build(p,no_annotations=False):
         """
         There are 6 stages and there's no going backwards:
             Btw the BNF grammar fails to capture the fact that defaulted args can only come after nondefaulted args
@@ -1641,159 +1679,49 @@ class Formals(SynNode):
         5. (ident=Expr) list
         6. **ident | **
         A trailing comma at the end is okay
+        Any of these can have an annotation like ident:expression or ident:expression=expression
         """
+        @p.or_none
+        def annotation():
+            if no_annotations:
+                return None
+            p.token(':')
+            annotation = p.expression()
+            return annotation
 
-        self.args = []
-        self.defaults = []
-        self.stararg = None
-        self.kwonlyargs = []
-        self.kwonlydefaults = []
-        self.doublestararg = None
+        @p.loop @p.comma_sep
+        def stage1_4():
+            name = p.identifier()
+            ann = annotation()
+            return Arg(name).annotate(ann)
+        @p.loop @p.comma_sep
+        def stage2_5():
+            name = p.identifier()
+            ann = annotation()
+            p.token('=')
+            val = p.expression()
+            return KVPair(name,val).annotate(ann)
+        @p.or_none @p.comma_sep
+        def stage3():
+            p.token('*')
+            name = p.or_('').identifier()
+            ann = annotation()
+            return Var(name).annotate(ann)
+        @p.or_none @p.comma_sep
+        def stage6():
+            p.token('**')
+            name = p.or_('').identifier()
+            ann = annotation()
+            return Var(name).annotate(ann)
 
-        stage = 1
+        args = stage1_4() + stage2_5()
+        stararg = stage3()
+        kwonlyargs = stage1_4() + stage2_5()
+        doublestararg = stage6()
 
-        # process each comma separated elemlist
-        while not empty(elems,fail=BOOL):
-            if stage == 6:
-                raise SyntaxError("Nothing can come after a double-starred parameter")
-            if keyword_arg(elems,fail=BOOL):
-                kwarg,elems = keyword_arg(elems)
-                if stage <= 2:
-                    self.args.append(Arg(kwarg.name))
-                    self.defaults.append(kwarg.value)
-                    stage = 2
-                elif stage <= 5:
-                    self.kwonlyargs.append(Arg(kwarg.name))
-                    self.kwonlydefaults.append(kwarg.value)
-                    stage = 5
-            elif token(elems,'*',fail=BOOL):
-                if stage == 3:
-                    raise SyntaxError("Can't have two single-starred parameters")
-                if stage == 4:
-                    raise SyntaxError("single-starred parameter must go before all kwonly parameters")
+        return Formals(args,stararg,kwonlyargs,doublestararg)
 
-                elems = elems[1:]
-                argname = identifier(elems,fail=FAIL)
-                self.stararg = Arg(argname) if (argname is not FAIL) else ''
-                stage = 3
-            elif token(elems,'**',fail=BOOL):
-                elems = elems[1:]
-                argname = identifier(elems,fail=FAIL)
-                self.doublestararg = Arg(argname) if (argname is not FAIL) else ''
-                stage = 6
-            elif identifier(elems,fail=BOOL):
-                if stage == 2:
-                    raise SyntaxError("all positional parameters must go before all default-valued positional parameters")
-                if stage == 5 :
-                    raise SyntaxError("all kwonly parameters must go before all default-valued kwonly parameters")
-                elems = identifier(elems,fail=BOOL)
-                argname = identifier(elems)
-                if stage == 1:
-                    self.args.append(Arg(argname))
-                elif stage <= 4:
-                    self.kwonlyargs.append(Arg(argname))
-                    stage = 4
-            # end of a formal
-            if empty(elems,fail=BOOL):
-                break
-            elems = token(elems,',')
-
-        if position == 3:
-            raise SyntaxError(f"named arguments must follow bare *")
-        return # end of __init__ for Formals
-
-
-
-
-
-#            if len(elems) == 0:
-#                if i != len(items)-1:
-#                    raise SyntaxError(f"two commas in a row not allowed in argument list") # TODO point out exactly where it is / suggest fix / setup vim commands for fix
-#
-#            # kwonlynondefaulted or nondefaulted or stararg(no identifier)
-#            if len(elems) == 1: # nondefaulted arg or stararg with no identifier
-#                argname,elems = identifier(elems,fail=FAIL)
-#                # kwonlynondefaulted or nondefaulted
-#                if argname is not FAIL: # successfully parsed a nondefaulted arg
-#                    if position > _kwonlynondefaulted:
-#                        raise SyntaxError(f"{err_str[_kwonlynondefaulted]} must go before {err_str[position]}")
-#                    # kwonlynondefaulted
-#                    if _nondefaulted > position >= _kwonlynondefaulted:
-#                        position = _kwonlynondefaulted
-#                        self.kwonlyargs.append(Arg(argname))
-#                        continue
-#                    # nondefaulted
-#                    position = _nondefaulted
-#                    self.args.append(Arg(argname))
-#                    continue
-#                # failed kwonlynondefaulted and nondefaulted so lets try stararg with no ident
-#                status,elems = token(elems,'*',fail=FAIL)
-#                # stararg with no identifier. Note that theres no '**' without an identifier
-#                if status is not FAIL: # successfully parsed a stararg with no identifier
-#                    if position == _stararg:
-#                        raise SyntaxError(f"not allowed to have multiple * or *arg arguments")
-#                    if position > _stararg:
-#                        raise SyntaxError(f"{err_str[_stararg]} must go before {err_str[position]}")
-#                    position = _stararg
-#                    self.stararg = Arg('')
-#                    continue
-#                raise SyntaxError(f"unable to parse argument {elems}")
-#            # stararg with identifier
-#            if len(elems) == 2: # *arg or **arg
-#                status,elems = token(elems,'*',fail=FAIL)
-#                if status is FAIL:
-#                    status2,elems = token(elems,'**',fail=FAIL)
-#                if status is FAIL and status2 is FAIL:
-#                    raise SyntaxError(f"unable to parse argument {elems}")
-#                if status is not FAIL:
-#                    _mode = _stararg
-#                else:
-#                    _mode = _doublestararg
-#
-#                argname,elems = identifier(elems,fail=FAIL)
-#                if status is not FAIL and argname is not FAIL: # successfully parsed a stararg with identifier
-#                    if position == _mode:
-#                        raise SyntaxError(f"not allowed to have multiple {'*arg' if _mode == _stararg else '**kwargs'} arguments")
-#                    if position > _mode:
-#                        raise SyntaxError(f"{err_str[_stararg]} must go before {err_str[position]}")
-#                    position = _mode
-#                    if _mode == _stararg:
-#                        self.stararg = Arg(argname)
-#                    else:
-#                        self.doublestararg = Arg(argname)
-#                    continue
-#                raise SyntaxError(f"unable to parse argument {elems}")
-#            # defaulted and kwonlydefaulted
-#            if len(elems) > 2:
-#                argname,elems = identifier(elems,fail=FAIL)
-#                status,elems = token(elems,'=',fail=FAIL)
-#                if argname is FAIL or status is FAIL:
-#                    raise SyntaxError(f"unable to parse argument {elems}")
-#                val,elems = expr(elems,fail=FAIL)
-#                if val is FAIL:
-#                    raise SyntaxError(f"unable to parse expression for default {elems}")
-#                status = empty(elems,fail=FAIL)
-#                if status is FAIL:
-#                    raise SyntaxError(f"trailing tokens in default. The expression was parsed as {val} but there are trailing tokens: {elems}")
-#                if position > _kwonlydefaulted:
-#                    raise SyntaxError(f"{err_str[_kwonlydefaulted]} must go before {err_str[position]}")
-#                # kwonlydefaulted
-#                if _defaulted > position >= _kwonlydefaulted:
-#                    position = _kwonlydefaulted
-#                    self.kwonlyargs.append(Arg(argname))
-#                    self.kwonlydefaults.append(val)
-#                    continue
-#                # defaulted
-#                position = _defaulted
-#                self.args.append(Arg(argname))
-#                self.defaults.append(val)
-#                continue
-#
-#        if position == _stararg:
-#            raise SyntaxError(f"named arguments must follow bare *")
-#        return # end of __init__ for Formals
-
-class If(CompoundStmt):
+class If(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1804,7 +1732,7 @@ class If(CompoundStmt):
         self.body = stmts(compound.body)
 
 """ New and improved Go-style parser
-class If(CompoundStmt):
+class If(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1845,7 +1773,7 @@ FAIL = CONSTANT('FAIL')
 SILENT = CONSTANT('SILENT')
 OK = CONSTANT('OK')
 
-class Elif(CompoundStmt):
+class Elif(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1862,7 +1790,7 @@ class Elif(CompoundStmt):
         empty(head)
         self.body = stmts(compound.body)
 
-class Else(CompoundStmt):
+class Else(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1873,7 +1801,7 @@ class Else(CompoundStmt):
         self.body = stmts(compound.body)
 
 
-class For(CompoundStmt):
+class For(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1885,7 +1813,7 @@ class For(CompoundStmt):
         empty(head)
         self.body = stmts(compound.body)
 
-class While(CompoundStmt):
+class While(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1895,7 +1823,7 @@ class While(CompoundStmt):
         empty(head)
         self.body = stmts(compound.body)
 
-class With(CompoundStmt):
+class With(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1913,7 +1841,7 @@ class With(CompoundStmt):
             raise SyntaxError("empty `with` statement header")
         self.body = stmts(compound.body)
 
-class With(CompoundStmt):
+class With(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1936,7 +1864,7 @@ class Withitem(SynNode):
         super().__init__()
         self.contextmanager = contextmanager
         self.target = target
-class Try(CompoundStmt):
+class Try(Stmt):
     def __init__(self,compound):
         super().__init__()
         head = compound.head
@@ -1948,20 +1876,20 @@ class Try(CompoundStmt):
 
 
 ## Stmts that take an elem list as input
-class Return(SimpleStmt):
+class Return(Stmt):
     def __init__(self,elems):
         super().__init__()
 
         elems = keyword(elems,"return")
         self.val,elems = expr(elems)
         empty(elems)
-class Pass(SimpleStmt):
+class Pass(Stmt):
     def __init__(self,elems):
         super().__init__()
 
         elems = keyword(elems,"pass")
         empty(elems)
-class Raise(SimpleStmt):
+class Raise(Stmt):
     def __init__(self,elems):
         super().__init__()
         self.exception = None
@@ -1995,7 +1923,7 @@ def join(): # [[elem]] -> [elem]
 def raw_string():
     raise NotImplementedError
 
-class Import(SimpleStmt):
+class Import(Stmt):
     def __init__(self,elems):
         super().__init__()
         self.importitems = []
@@ -2035,19 +1963,19 @@ class Importitem(SynNode):
         super().__init__()
         self.var=var
         self.alias=alias
-class Break(SimpleStmt):
+class Break(Stmt):
     def __init__(self,elems):
         super().__init__()
 
         elems = keyword(elems,"break")
         empty(elems)
-class Continue(SimpleStmt):
+class Continue(Stmt):
     def __init__(self,elems):
         super().__init__()
 
         elems = keyword(elems,"continue")
         empty(elems)
-class Delete(SimpleStmt):
+class Delete(Stmt):
     def __init__(self,elems):
         super().__init__()
         self.targets = []
@@ -2060,7 +1988,7 @@ class Delete(SimpleStmt):
             raise SyntaxError("`del` statement must have at least one target")
         empty(elems)
 
-class Global(SimpleStmt):
+class Global(Stmt):
     def __init__(self,elems):
         super().__init__()
         self.names = []
@@ -2073,7 +2001,7 @@ class Global(SimpleStmt):
             raise SyntaxError("`global` statement must have at least one target")
         empty(elems)
 
-class Nonlocal(SimpleStmt):
+class Nonlocal(Stmt):
     def __init__(self,elems):
         super().__init__()
         self.names = []
@@ -2087,13 +2015,13 @@ class Nonlocal(SimpleStmt):
 
         empty(elems)
 
-class ExprStmt(SimpleStmt):
+class ExprStmt(Stmt):
     def __init__(self,elems):
         super().__init__()
         self.expr,elems = expr(elems)
         empty(elems)
 
-class Asn(SimpleStmt):
+class Asn(Stmt):
     def __init__(self,elems):
         super().__init__()
         self.targets = []
@@ -2107,7 +2035,7 @@ class Asn(SimpleStmt):
             self.targets.append(tar)
 
 
-class AugAsn(SimpleStmt):
+class AugAsn(Stmt):
     def __init__(self,elems):
         super().__init__()
         self.target,elems = target(elems)
@@ -2117,7 +2045,7 @@ class AugAsn(SimpleStmt):
         self.val = expr(elems)
         empty(elems)
 
-class Assert(SimpleStmt):
+class Assert(Stmt):
     def __init__(self,elems):
         super().__init__()
         elems = keyword(elems,"assert")
@@ -2919,10 +2847,108 @@ class Tok(LocTagged):
 
 
 
-leading_whitespace_regex = re.compile(r'(\s*)')
 
 
 LineData = namedtuple('LineData', 'linetkns, leading_whitespace, newline_tok, commenttkns')
+
+
+leading_ws_regex = re.compile(r'(\s*)')
+class Line:
+    def __init__(self,input,loc):
+        assert '\n' not in input
+        self.loc = loc # Location with file and lineno
+        self.leading_ws = leading_ws_regex.match(input).group()
+        remaining = input[len(self.leading_ws):]
+        self.tokens = []
+        self.comment = []
+        curr_list = self.tokens
+
+        while remaining != '':
+            for TYP,regex in regex_of_token.items():
+                charno = len(line) - len(remaining)
+                match = regex.match(remaining)
+                if match is None:
+                    continue # match failed
+                # successful match
+                remaining = remaining[match.end():]
+                # comments
+                if TYP is HASH:
+                    curr_list = self.comment # switch to adding to list of comment tokens
+                    continue
+                # keywords
+                if TYP is ID:
+                    if match.group() in keywords:
+                        # for efficiency rather than having every keyword in the regex
+                        TYP = KEYWORD
+                grps = match.groups()
+                curr_list.append(Tok(
+                        TYP, # typ
+                        grps[0] if grps != [] else None, # data
+                        match.group(), # verbatim
+                        LocationRange(self.loc
+                        Loc(Pos(lineno,charno),Pos(lineno,len(line)-len(remaining))) # lineno,charno TODO watch out for how \t is handled!
+                    ))
+                list_to_extend[-1].finish()
+                break #break unless you 'continue'd before
+            else: # nobreak
+                raise ValueError(f"Somehow failed to match on any tokens, should be impossible because of the UNKNOWN token")
+        self.empty = (len(self.tokens) == 0)
+
+class Location:
+    def __init__(self,*,file=None,lines=None,chars=None):
+        assert isinstance(lines,(list,tuple))
+        assert isinstance(chars,(list,tuple))
+        assert len(chars) == 2
+        assert isinstance(file,str)
+        self.file = file
+        self.lines = lines
+        self.chars = chars
+    @staticmethod
+    def join(*locs):
+        """
+        Join contiguous Locations
+        """
+        file = locs[0].file
+        lines = locs[0].lines
+        chars = locs[0].chars
+        for loc in locs[1:]:
+            assert loc.file = file
+            assert loc.lines[-1] == lines[-1] + 1
+            assert loc.chars[-1] == chars[-1] + 1
+        return Location(file=file,lines=lines,chars=chars)
+
+
+def tokenize_line(line):
+    """
+    Takes a pre-stripped line as input, returns a list of Tok
+    """
+    assert line == line.strip()
+    assert '\n' not in line
+    remaining = line
+    while remaining != '':
+        for TOKEN,regex in regex_of_token.items():
+            charno = len(line) - len(remaining)
+            match = regex.match(remaining)
+            if match is None:
+                continue # match failed
+            # successful match
+            remaining = remaining[match.end():]
+            if TOKEN is HASH and list_to_extend is not commenttkns:
+                list_to_extend = commenttkns # switch to adding to list of comment tokens
+                continue
+            if TOKEN is ID:
+                if match.group() in keywords:
+                    TOKEN = KEYWORD # for efficiency rather than having every keyword in the regex
+            grps = match.groups()
+            list_to_extend.append(Tok(TOKEN,
+                grps[0] if grps else '', # [] is nontruthy
+                match.group(),
+                Loc(Pos(lineno,charno),Pos(lineno,len(line)-len(remaining))) # lineno,charno TODO watch out for how \t is handled!
+                ))
+            list_to_extend[-1].finish()
+            break #break unless you 'continue'd before
+        else: # nobreak
+            raise ValueError(f"Somehow failed to match on any tokens, should be impossible because of the UNKNOWN token")
 
 # turns a string into a list of Tokens
 # if ur sending an interative line PLEASE strip the trailing \n
