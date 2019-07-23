@@ -22,17 +22,30 @@ TODO
 -Imporve Var parsing to cover all cases
 -Figure out how Annotated class should work. Ofc it should basically be a Var. It should be able to wrap anything in the future i suppose. So maybe it should just be a fundamental part of a Node's label. These hard-annotations are done by the user and soft-annotations are figured out by the parser. HMMM but ok, right now annotations in python only apply to functions (we should maintain that but also allow it for certain other cases like assignment or perhapppps standalone / in a tuple x:int,y:int or even x,y:int as stmts. Basically a typehint stmt)
 -note that .annotate() cant be used on strings, making Var more convenient to use widely. If a string needs annotation it should be a Var instead.
--Keep KeywordArg, and extend Arg to have an optional default
-    Arguments -> .args .kwargs
-    Arg
-    KVPair (ie kwargs)
-    Parameters -> .args .kwonlyargs .stararg(str|''|None) .doublestararg
+-Redo documentation to properly say what each type has for example for Arguments and Parameters:
+    Arguments -> .args((Arg|KVPair|Starred(Arg)|DoubleStarred(Arg)) list)
+    Parameters -> .args/.kwonlyargs((Arg|KVPair) list) .stararg/.doublestararg(str|''|None)
         If you want to find defaulted ones easy just do a quick filter. We don't do it for you, that unnecessary.
     Arg
     KVPair (ie defaulted args)
 
 -maybe have token() return a Tok to make stuff like Compare better
 -Args and Formals probably want to be rewritten as __init__(etc etc etc) and build(p) so that they can be instantiated without parser.
+
+
+A Guide to our functions:
+
+p.exclusive_xor(*fns)
+p.comma_list(*fns)
+p.comma_list(*fns,nonempty=True)
+p.loop(*fns)
+p.or_none(*fns)
+
+
+make sure .assert_empty() is properly called everywhere
+
+
+
 
 
 -(again at end) ensure all super().__init__() calls are done
@@ -167,15 +180,12 @@ class Parser():
         super().__init__()
         self.elems = elems # list of Tokens/Atoms
         self.idx = 0
-        #self.bool = BoolCallWrapper(self)
-        #self.silent = SilentCallWrapper(self)
-        #self.fail = FailCallWrapper(self)
         self.must = AssertCallWrapper(self)
-        self.or_none = OptionalCallWrapper(self,None) # or_none is most encouraged
         self.not_none = NotNoneCallWrapper(self) # or_none is most encouraged
-        self.or_fail = OptionalCallWrapper(self,FAIL)
-        self.or_false = OptionalCallWrapper(self,False)
-        self.or_ = (lambda retval: OptionalCallWrapper(self,retval))
+        self.or_none = Postprocessor(self,None) # or_none is most encouraged
+        self.or_fail = Postprocessor(self,FAIL)
+        self.or_false = Postprocessor(self,False)
+        self.or_ = (lambda retval: Postprocessor(self,retval))
     def next(self):
         if self.idx >= len(self.elems):
             raise SyntaxError("Calling next() when already passed the last elem")
@@ -187,25 +197,30 @@ class Parser():
         if self.idx >= len(self.elems):
             raise SyntaxError("Ran out of elems to consume")
         return self.elems[self.idx]
-    def comma_sep(self,fn):
-        """
-        Decorator that calls fn() then consumes a comma if parser is not empty (ie covers the trailing comma case)
-        """
-        def wrapped():
-            ret = fn()
-            if not p.empty():
-                p.token(',') # may SynErr, causing rollback to before fn()
-            return ret
-        return wrapped
 
-    def loop(self,fn):
+    def comma_list(self,*fns,nonempty=False):
         """
         Decorator that calls fn() in a loop and returns a list of the results. List is empty if first call fails.
         """
         ret = []
         while True:
             try:
-                ret.append(fn())
+                ret.append(self.logical_xor(*fns))
+                if not self.or_false.token(','):
+                    break
+            except SyntaxError:
+                break
+        if nonempty and len(ret) == 0:
+            raise SyntaxError
+        return ret
+    def loop(self,*fns):
+        """
+        Decorator that calls fn() in a loop and returns a list of the results. List is empty if first call fails.
+        """
+        ret = []
+        while True:
+            try:
+                ret.append(self.logical_xor(*fns))
             except SyntaxError:
                 break
         return ret
@@ -278,7 +293,7 @@ class Parser():
     def parameter_list(self,no_annotations=False):
         return self.build_node(Parameters,no_annotations=no_annotations)
     def expression_list(self):
-        return p.comma_list(p.expression)
+        return p.comma_list(p.expression,nonempty=True)
     def expression_nocond():
         def lambda_expr():
             return self.build_node(Lambda,nocond=True)
@@ -297,7 +312,7 @@ class Parser():
             return Starred(self.or_expr())
         def unstarred():
             return self.expression()
-        return comma_list(starred,unstarred)
+        return comma_list(starred,unstarred,nonempty=True)
 
     def starred_list(self):
         return self.starred_expression()
@@ -359,8 +374,6 @@ class Parser():
         return self._atom_body(ABracket)
     def colonlist(p):
         return _atom_head_body(AColonList)
-    def argument_list(self):
-        return self.build_node(Arguments)
     def _atom_body(self,atom_cls):
         if not isinstance(p.tok,atom_cls):
             raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
@@ -373,8 +386,10 @@ class Parser():
         ret = Parser(p.tok.head),Parser(p.tok.body)
         p.next()
         return ret
+    def argument_list(self):
+        return self.build_node(Arguments)
     def target_list(p):
-        return p.comma_list(p.target)
+        return p.comma_list(p.target,nonempty=True)
     ## META FNS
     def logical_xor(self,*option_fns):
         for fn in option_fns: # try each fn
@@ -397,24 +412,6 @@ class Parser():
         if len(fns) == len(ret) == 1:
             return fn() # we gotta actually execute it for real now since we just peek()'d before
         raise SyntaxError # 0 matches
-    def comma_list(self,*option_fns):
-        results = []
-        at_least_one = False
-        while True:
-            success = False
-            with self.maybe():
-                res = self.logical_xor(*option_fns)
-                results.append(res)
-                at_least_one = True
-                success = True
-            if not success:
-                break # end when all fns fail to parse
-            if not self.or_false.token(','):
-                # no comma at end means break. Trailing comma will be handled by `if not success`. Note that running out of elems will end up causing a SyntaxError so it works out well
-                break
-        if not at_least_one:
-            raise SyntaxError
-        return results
     ## BUILDING AND IDENTIFYING ODES
     def build_node(self,nodeclass,leftnode=None,**kwargs):
         assert not isinstance(nodeclass,InitExpr)
@@ -463,7 +460,6 @@ class Parser():
                         return self.build_node(cls,leftnode=node) # <- key difference is leftnode
                     non_recursive.append(build_fn)
 
-
             node_or_none = self.or_none.logical_xor(*non_recursive)
             if node is None: # exit on failure to expand more
                 break
@@ -475,22 +471,7 @@ class Parser():
 
         return node
 
-#class PeekCallWrapper:
-#    """
-#    Return normal result and reset the tokenstream to where it was at the start of the call.
-#    """
-#    def __init__(self,parser):
-#        self.parser = parser
-#    def __getattr__(self,key):
-#        fn = getattr(self.parser,key)
-#        def wrapper(*args,**kwargs):
-#            idx = self.parser.idx
-#            ret = fn(*args,**kwargs)
-#            self.parser.idx = idx
-#            return ret
-#        return wrapper
-
-class OptionalCallWrapper:
+class Postprocessor:
     """
     Return normal result if success, return FAIL if failure and reset the tokenstream to where it was at the start of the call.
     """
@@ -499,17 +480,12 @@ class OptionalCallWrapper:
         self.parser = parser
         self.retval = retval
     def __call__(self,fn):
-        """
-        For use as a decorator
-        """
-        def wrapper(*args,**kwargs):
-            idx = self.parser.idx
-            try:
-                return fn(*args,**kwargs)
-            except SyntaxError:
-                self.parser.idx = idx
-                return self.retval
-        return wrapper
+        idx = self.parser.idx
+        try:
+            return fn(*args,**kwargs)
+        except SyntaxError:
+            self.parser.idx = idx
+            return self.retval
     def __getattr__(self,key):
         fn = getattr(self.parser,key)
         def wrapper(*args,**kwargs):
@@ -540,7 +516,7 @@ class NotNoneCallWrapper:
 
 class AssertCallWrapper:
     """
-    SyntaxError fi return value is not False and is not None
+    SyntaxError if return value is not False and is not None
     """
     def __init__(self,parser):
         super().__init__()
@@ -555,13 +531,6 @@ class AssertCallWrapper:
             return ret
         return wrapper
 
-
-"""
-
-
-
-
-"""
 
 
 
@@ -1045,11 +1014,6 @@ def stmt(self):
 #    if istoken(rest,0,BINOPS) and istoken(rest,1,EQ):
 #        return AugAsn(elems)
 
-def expr_assert_empty(*args,**kwargs):
-    *ignore,elems = expr(*args,**kwargs)
-    empty(elems)
-    return e
-
 """
 Returns the first valid expression that starts at elems[0] and is not the subexpression of a larger expression in `elems`, and also returns the remains of `elems`
 
@@ -1518,13 +1482,8 @@ class Node(LocTagged): # abstract class, should never be instatiated
     def __init__(self,partial_stmt):
         super().__init__()
         pass
-#    def finish():
-#        attrs = list(self.__dict__.keys())
-#        for attr in attrs:
 
 
-
-def target(): pass
 
 
 def stmts(elem_list_list): # [[elem]] -> [Stmt]
@@ -1536,8 +1495,6 @@ def stmts(elem_list_list): # [[elem]] -> [Stmt]
         elif the_stmt.dependent:
             raise SyntaxError(f"dependent statement {the_stmt} not accepted by neighbor {the_stmts[-1]}")
         the_stmts.append(the_stmt)
-
-def empty(): pass # assert that the elem list given is empty, if not throw an error about trailing symbols
 
 
 # STMTS
@@ -1634,13 +1591,12 @@ class Arguments(SynNode):
             ((ident=Expr) | **Expr) list
         A trailing comma at the end is okay
         """
+        p = p.parens()
 
-        @p.loop @p.comma_sep
         def stage1():
             if p.or_false.token('*'):
                 return Starred(Arg(p.identifier()))
             return Arg(p.identifier())
-        @p.loop @p.comma_sep
         def stage2():
             if p.or_false.token('*'):
                 return Starred(Arg(p.identifier()))
@@ -1648,7 +1604,6 @@ class Arguments(SynNode):
             p.token('=')
             val = p.expression()
             return KVPair(name,val)
-        @p.loop @p.comma_sep
         def stage3():
             if p.or_false.token('**'):
                 return DoubleStarred(Arg(p.identifier()))
@@ -1657,7 +1612,8 @@ class Arguments(SynNode):
             val = p.expression()
             return KVPair(name,val)
 
-        args = stage1() + stage2() + stage3()
+        args = p.comma_list(stage1) + p.comma_list(stage2) + p.comma_list(stage3)
+        p.assert_empty()
         return Arguments(args)
 
 class Parameters(SynNode):
@@ -1681,7 +1637,7 @@ class Parameters(SynNode):
         A trailing comma at the end is okay
         Any of these can have an annotation like ident:expression or ident:expression=expression
         """
-        @p.or_none
+
         def annotation():
             if no_annotations:
                 return None
@@ -1689,35 +1645,31 @@ class Parameters(SynNode):
             annotation = p.expression()
             return annotation
 
-        @p.loop @p.comma_sep
         def stage1_4():
             name = p.identifier()
-            ann = annotation()
+            ann = p.or_none(annotation)
             return Arg(name).annotate(ann)
-        @p.loop @p.comma_sep
         def stage2_5():
             name = p.identifier()
-            ann = annotation()
+            ann = p.or_none(annotation)
             p.token('=')
             val = p.expression()
             return KVPair(name,val).annotate(ann)
-        @p.or_none @p.comma_sep
         def stage3():
             p.token('*')
             name = p.or_('').identifier()
             ann = annotation()
             return Var(name).annotate(ann)
-        @p.or_none @p.comma_sep
         def stage6():
             p.token('**')
             name = p.or_('').identifier()
             ann = annotation()
             return Var(name).annotate(ann)
 
-        args = stage1_4() + stage2_5()
-        stararg = stage3()
-        kwonlyargs = stage1_4() + stage2_5()
-        doublestararg = stage6()
+        args = p.comma_list(stage1_4) + p.comma_list(stage2_5)
+        stararg = p.or_none(stage3)
+        kwonlyargs = p.comma_list(stage1_4) + p.comma_list(stage2_5)
+        doublestararg = p.or_none(stage6)
 
         return Formals(args,stararg,kwonlyargs,doublestararg)
 
@@ -2189,7 +2141,7 @@ class Dict(Expr):
             p.token('**')
             e = DoubleStarred(p.or_expr())
             return e
-        def key_datum_list():
+        def key_datum_list(): # emtpy is allowed
             return Dict(p.comma_list(kv_pair,dict_expansion))
 
         return p.logical_xor(comprehension,key_datum_list)
