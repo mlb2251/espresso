@@ -12,9 +12,11 @@ keywords = set(kwlist)
 """
 
 TODO
--transition all Stmts to use build() for same reason as exprs -- so they can be initialized manually without a parser.
+-p.next_line() and make save_state() work with it
+-p.stmts()
 -assert that end of line is reached after each stmt is parsed
 -change .tok to .curr since it can be an Atom as well?
+-use .alias() in all those places i did it manually before
 - add a .bnf field to all Nodes (where applicable)
 - make notes about how expression_list starred_expression and starred_list all yield Tuples or Exprs rather than python lists, unless as_expr=False is passed to them, and the LRM says this should only really be done for SetDisplay and ListDisplay. target_list, parameter_list, etc all yield python lists.
     -youll want to make sure nodes with an (expression/starred)_(list/item) have a .val or .expr field not a .vals or .exprs field -- its gonna be a single value!
@@ -30,6 +32,9 @@ note: i guess we cut the _stmt postfix off most of our classes (Assignment inste
 -add the blank-to-None conversion for special cases like return stmts -- thats prob in the Return syntax already
 -make it so tok_like will match 'not   in' when asked about 'not in' etc. Generalize it for any whitespace in any string reducing to just one. Only try on initial failure to save a bit.
 -add autoinserted return None stmt at the end of fns
+-make a ident.ident.ident shorthand (with no_whitespace) like dotted_name (use in Decorator, Import, etc)
+-make it so @compound can take '@' for example
+-note my argument_list() actually includes the parens and opt trailing comma already
 -with AugAsn you need to ensure its a proper operator (not just BINOP eg not 'and') and ensure theres no whitespace captured by the regex after the operator, ie .data == .verbatim. This is all to avoid annoying parsing overhead with *= and such being tokens that have to come before the more common operators.
 -we need to deal with cases like AttributeRef where x.y is okay but x .y or x. y are not okay, likewise in import statement "mod1. mod2" is not okay. Basically i think this applies pretty consistently to certain tokens like '.' and maybe brackets. Could have a no_whitespace() contextmanager perhaps that changes the behavior of .tok to forbid whitespace.
 Quote stuff:
@@ -2030,21 +2035,25 @@ class While(Stmt):
         else_body = p.or_none(else_fn)
         return While(cond,body,else_body)
 
-@compound('for')
+
+@compound('for','async')
 class For(Stmt):
-    def __init__(self,targets,iter,body,else_body):
+    def __init__(self,targets,iter,body,else_body,is_async):
         super().__init__()
         self.targets = targets # target list
         self.iter = iter # Tuple | expression
         self.body = body # Stmt list
         self.else_body = else_body # (Stmt list) | None
+        self.is_async = is_async
     @staticmethod
     def build(p):
         """
         for_stmt ::=  "for" target_list "in" expression_list ":" suite
               ["else" ":" suite]
+        async_for_stmt ::=  "async" for_stmt
         """
         with p.head():
+            is_async = p.or_false.keyword('async')
             p.keyword('for')
             targets = p.target_list()
             p.keyword('in')
@@ -2098,45 +2107,122 @@ class Try(Stmt):
 
         return p.logical_xor(try1,try2)
 
+@compound('with')
+class With(Stmt):
+    def __init__(self,aliases,body,is_async)
+        super().__init__()
+        self.aliases = aliases
+        self.body = body
+        self.is_async = is_async
+    @staticmethod
+    def build(p):
+        """
+        with_stmt ::=  "with" with_item ("," with_item)* ":" suite
+        async_with_stmt ::=  "async" with_stmt
+        with_item ::=  expression ["as" target]
+        """
+        def with_item():
+            return p.alias(p.expression)
+        with p.head():
+            is_async = p.or_false.keyword('async')
+            p.keyword('with')
+            aliases = p.comma_list(with_item,nonempty=True,allow_trailing_comma=False)
+        body = p.simple_body()
+        return With(aliases,body,is_async)
 
-"""
-with_stmt ::=  "with" with_item ("," with_item)* ":" suite
-with_item ::=  expression ["as" target]
-"""
+class Decorator(AuxNode):
+    def __init__(self,name_list,args):
+        self.name_list = name_list # str list
+        self.args = args # Arguments | None
+    @staticmethod
+    def build(p):
+        def dotted_name():
+            def dot_name():
+                p.token('.')
+                return p.identifier()
+            with p.no_whitespace():
+                return [p.identifier()] + p.list(dot_name)
+        p.token('@')
+        name_list = dotted_name()
+        args = p.or_none.argument_list()
+        return Decorator(name_list,args)
 
-"""
-funcdef                 ::=  [decorators] "def" funcname "(" [parameter_list] ")"
-                             ["->" expression] ":" suite
-decorators              ::=  decorator+
-decorator               ::=  "@" dotted_name ["(" [argument_list [","]] ")"] NEWLINE
-dotted_name             ::=  identifier ("." identifier)*
-parameter_list          ::=  defparameter ("," defparameter)* ["," [parameter_list_starargs]]
-                             | parameter_list_starargs
-parameter_list_starargs ::=  "*" [parameter] ("," defparameter)* ["," ["**" parameter [","]]]
-                             | "**" parameter [","]
-parameter               ::=  identifier [":" expression]
-defparameter            ::=  parameter ["=" expression]
-funcname                ::=  identifier
-"""
 
-"""
-classdef    ::=  [decorators] "class" classname [inheritance] ":" suite
-inheritance ::=  "(" [argument_list] ")"
-classname   ::=  identifier
-"""
+@compound('def','@')
+class FuncDef(Stmt):
+    def __init__(self,decorators,fname,params,body,is_async)
+        super().__init__()
+        self.decorators = decorators # Decorator
+        self.fname = fname # str
+        self.params = params # Parameters
+        self.body = body # Stmt list
+        self.is_async = is_async # bool
+    @staticmethod
+    def build(p):
+        """
+        funcdef                 ::=  [decorators] "def" funcname "(" [parameter_list] ")"
+                                     ["->" expression] ":" suite
+        async_funcdef ::=  [decorators] "async" "def" funcname "(" [parameter_list] ")"
+                           ["->" expression] ":" suite
+        decorators              ::=  decorator+
+        decorator               ::=  "@" dotted_name ["(" [argument_list [","]] ")"] NEWLINE
+        dotted_name             ::=  identifier ("." identifier)*
+        parameter_list          ::=  defparameter ("," defparameter)* ["," [parameter_list_starargs]]
+                                     | parameter_list_starargs
+        parameter_list_starargs ::=  "*" [parameter] ("," defparameter)* ["," ["**" parameter [","]]]
+                                     | "**" parameter [","]
+        parameter               ::=  identifier [":" expression]
+        defparameter            ::=  parameter ["=" expression]
+        funcname                ::=  identifier
+        """
 
-"""
-async_funcdef ::=  [decorators] "async" "def" funcname "(" [parameter_list] ")"
-                   ["->" expression] ":" suite
-"""
+        def decorator():
+            p.build_node(Decorator)
+            p.next_line()
+        decorators = p.list(decorator)
+        with p.head():
+            is_async = p.or_false.keyword('async')
+            p.keyword('def')
+            fname = p.identifier()
+            params = p.parameter_list()
+            def annotation():
+                p.token('->')
+                return p.expression()
+            ann = p.or_none.annotation()
+        body = p.simple_body()
 
-"""
-async_for_stmt ::=  "async" for_stmt
-"""
+        return FuncDef(decorators,fname,params,body,is_async).annotate(ann)
 
-"""
-async_with_stmt ::=  "async" with_stmt
-"""
+@compound('class','@')
+class ClassDef(Stmt):
+    def __init__(self,decorators,fname,inheritance,body)
+        super().__init__()
+        self.decorators = decorators # Decorator
+        self.name = name # str
+        self.inheritance = inheritance # Arguments
+        self.body = body # Stmt list
+    @staticmethod
+    def build(p):
+        """
+        classdef    ::=  [decorators] "class" classname [inheritance] ":" suite
+        inheritance ::=  "(" [argument_list] ")"
+        classname   ::=  identifier
+        """
+        def decorator():
+            p.build_node(Decorator)
+            p.next_line()
+        decorators = p.list(decorator)
+        with p.head():
+            p.keyword('class')
+            name = p.identifier()
+            inheritance = p.argument_list()
+        body = p.simple_body()
+
+        return ClassDef(decorators,name,inheritance,body)
+
+
+
+
 
 class CONSTANT:
     instances = []
