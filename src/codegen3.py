@@ -14,6 +14,7 @@ keywords = set(kwlist)
 TODO
 -transition all Stmts to use build() for same reason as exprs -- so they can be initialized manually without a parser.
 -assert that end of line is reached after each stmt is parsed
+-change .tok to .curr since it can be an Atom as well?
 - add a .bnf field to all Nodes (where applicable)
 - make notes about how expression_list starred_expression and starred_list all yield Tuples or Exprs rather than python lists, unless as_expr=False is passed to them, and the LRM says this should only really be done for SetDisplay and ListDisplay. target_list, parameter_list, etc all yield python lists.
     -youll want to make sure nodes with an (expression/starred)_(list/item) have a .val or .expr field not a .vals or .exprs field -- its gonna be a single value!
@@ -90,6 +91,7 @@ Don't worry .identify is always called with peek(), you dont need to manage that
 
 
 
+It's important not to keep any state that needs to potentially be rewound in the Atoms or Tokens during Parser action. All that should be in the Parser and save_state/load_state should caputre it.
 
 
 A Guide to our functions:
@@ -359,6 +361,19 @@ class Parser():
         self.or_ = (lambda retval: Postprocessor(self,retval))
         self.no_ws = False # indicates if whitespace after tokens is currently allowed
         self.no_ws_initial = False # used by no_whitespace()
+        self.parsed = [] # list of token/atom lists that have been parsed. Used for .head and .body elements using `is` comparisons to check the pointers and see if theyve been parsed
+    def save_state(self):
+        def deepcopy(val): # esp important for self.parsed
+            if isinstance(val,list):
+                return [deepcopy(v) for v in val]
+            if isinstance(val,tuple):
+                return tuple([deepcopy(v) for v in val])
+            if isinstance(val,dict):
+                return [deepcopy(k):deepcopy(v) for k,v in val.items()]
+            return val
+        return deepcopy(self.__dict__)
+    def load_state(self,state):
+        self.__dict__ = state
     def next(self):
         if self.idx >= len(self.elems):
             raise SyntaxError("Calling next() when already passed the last elem")
@@ -477,21 +492,21 @@ class Parser():
         """
         contextmanager that rewinds token stream to wherever it started, and doesnt stop error propagation
         """
-        idx = self.idx
+        state = self.save_state()
         try:
             yield None
         finally:
-            self.idx = idx
+            self.load_state(state)
     @contextmanager
     def maybe(self):
         """
         contextmanager that rewinds token stream to wherever it started only if a SyntaxError is raised, and catches the error.
         """
-        idx = self.idx
+        state = self.save_state()
         try:
             yield None
         except SyntaxError:
-            self.idx = idx
+            self.load_state(state)
     @contextmanager
     def no_whitespace(self):
         """
@@ -516,16 +531,34 @@ class Parser():
         return self._compound_atom_parser(AQuote)
     def brackets(self):
         return self._compound_atom_parser(ABracket)
-    def colonlist_head(self):
+    def head(self):
         return self._compound_atom_parser(AColonList,'head')
-    def colonlist_body(self):
+    def body(self):
         return self._compound_atom_parser(AColonList,'body')
+    def simple_body(self):
+        with self.body()
+            return self.stmts()
+    def simple_head(self,kw):
+        with self.head()
+            self.keyword(kw)
+    def simple_block(self,kw):
+        self.simple_head(kw)
+        return self.simple_body()
+
     @contextmanager
     def _compound_atom_parser(self,atom_cls,attr='body'):
-        if not isinstance(p.tok,atom_cls):
-            raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
-        elems,idx = self.elems, self.idx
-        self.elems = getattr(p.tok,attr)
+        if not isinstance(self.tok,atom_cls):
+            raise SyntaxError(f"Attempting to parse {atom_cls} but found {self.tok}")
+        elems_list = getattr(self.tok,attr)
+
+        def isin(val,list): # like 'in' but uses `is` instead of `==`
+            return any([x is val for x in list])
+
+        if isin(elems_list,self.parsed):
+            raise SyntaxError("Already parsed this elems_list successfully!")
+
+        old_elems,old_idx = self.elems, self.idx
+        self.elems = elems_list
         self.idx = 0
         try:
             yield None
@@ -533,10 +566,12 @@ class Parser():
             if not self.empty():
                 raise SyntaxError(f"Unparsed remaining contents of a {atom_cls} is an error")
         finally:
-            self.elems = elems
-            self.idx = idx
-        self.tok.parsed.append(attr)
-        if ('head' in self.tok.parsed or not hasattr(self.tok,'head')) and ('body' in self.tok.parsed):
+            self.elems = old_elems
+            self.idx = old_idx
+
+        # only runs on success
+        self.parsed.append(elems_list)
+        if isin(p.tok.body,self.parsed) and (not hasattr(self.tok,'head') or isin(p.tok.head,self.parsed)):
             self.next() # step forward past this compound atom if 'head' (if exists) and 'body' have both been parsed
     ## BNF TYPES
     def parameter_list(self,no_annotations=False):
@@ -644,6 +679,19 @@ class Parser():
         if len(fns) == len(ret) == 1:
             return fn() # we gotta actually execute it for real now since we just peek()'d before
         raise SyntaxError # 0 matches
+
+    def alias(self,fn):
+        """
+        alias ::= fn() [as identifier]
+        returns an Alias
+        """
+        def as_ident():
+            self.keyword('as')
+            return self.identifier()
+        val = fn()
+        aliased_name = self.or_none(as_ident)
+        return Alias(val,aliased_name)
+
     ## BUILDING AND IDENTIFYING ODES
     def build_node_delayed(self,*args,**kwargs):
         def fn():
@@ -758,11 +806,11 @@ class Postprocessor:
         Use like p.or_none(some_fn)
         Note some_fn must take no arguments
         """
-        idx = self.parser.idx
+        state = self.parser.save_state()
         try:
             return fn()
         except SyntaxError:
-            self.parser.idx = idx
+            self.parser.load_state(state)
             return self.retval
     def __getattr__(self,key):
         """
@@ -1924,26 +1972,170 @@ class Parameters(AuxNode):
 
         return Formals(args,stararg,kwonlyargs,doublestararg)
 
+Elif = namedtuple('Elif','cond body') # expression, (Stmt list)
+@compound('if')
 class If(Stmt):
-    def __init__(self,compound):
+    def __init__(self,cond,body,elifs,else_body):
         super().__init__()
-        head = compound.head
+        self.cond = cond # expression
+        self.body = body # Stmt list
+        self.elifs = elifs # Elif list
+        self.else_body = else_body # (Stmt list) | None
+    @staticmethod
+    def build(p):
+        """
+        if_stmt ::=  "if" expression ":" suite
+             ("elif" expression ":" suite)*
+             ["else" ":" suite]
+        """
+        with p.head():
+            p.keyword('if')
+            cond = p.expression()
+        with p.body():
+            body =p.stmt_list()
+        def elif_fn():
+            with p.head():
+                if not p.or_false.keyword('elif'):
+                    p.keyword('else')
+                    p.keyword('if')
+                elif_cond = p.expression()
+            elif_body = p.simple_body()
+            return Elif(elif_cond,elif_body)
+        elifs = p.list(elif_fn)
+        def else_fn():
+            return p.simple_block('else')
+        else_body = p.or_none(else_fn)
+        return If(cond,body,elifs,else_body)
 
-        head = keyword(head,"if")
-        self.cond,head = expr(head)
-        empty(head)
-        self.body = stmts(compound.body)
-
-""" New and improved Go-style parser
-class If(Stmt):
-    def __init__(self,compound):
+@compound('while')
+class While(Stmt):
+    def __init__(self,cond,body,elifs,else_body):
         super().__init__()
-        head = compound.head
+        self.cond = cond # expression
+        self.body = body # Stmt list
+        self.else_body = else_body # (Stmt list) | None
+    @staticmethod
+    def build(p):
+        """
+        while_stmt ::=  "while" expression ":" suite
+                ["else" ":" suite]
+        """
+        with p.head():
+            p.keyword('while')
+            cond = p.expression()
+        with p.body():
+            body = p.stmt_list()
+        def else_fn():
+            return p.simple_block('else')
+        else_body = p.or_none(else_fn)
+        return While(cond,body,else_body)
 
-        head.keyword("if")
-        self.cond = head.expr(head)
-        head.empty()
-        self.body = compound.body.stmts()
+@compound('for')
+class For(Stmt):
+    def __init__(self,targets,iter,body,else_body):
+        super().__init__()
+        self.targets = targets # target list
+        self.iter = iter # Tuple | expression
+        self.body = body # Stmt list
+        self.else_body = else_body # (Stmt list) | None
+    @staticmethod
+    def build(p):
+        """
+        for_stmt ::=  "for" target_list "in" expression_list ":" suite
+              ["else" ":" suite]
+        """
+        with p.head():
+            p.keyword('for')
+            targets = p.target_list()
+            p.keyword('in')
+            iter = p.expression_list()
+        body = p.simple_body()
+        def else_fn():
+            return p.simple_block('else')
+        else_body = p.or_none(else_fn)
+        return For(targets,iter,body,else_body)
+
+namedtuple('Except','exc body') # Alias, (Stmt list)
+@compound('try')
+class Try(Stmt):
+    def __init__(self,body,excepts,else_body,finally_body)
+        super().__init__()
+        self.body = body # Stmt list
+        self.excepts = excepts # Except list
+        self.else_body = else_body # Stmt list
+        self.finally_body = finally_body # Stmt list
+    @staticmethod
+    def build(p):
+        """
+        try_stmt  ::=  try1_stmt | try2_stmt
+        try1_stmt ::=  "try" ":" suite
+                       ("except" [expression ["as" identifier]] ":" suite)+
+                       ["else" ":" suite]
+                       ["finally" ":" suite]
+        try2_stmt ::=  "try" ":" suite
+                       "finally" ":" suite
+        """
+        body = p.simple_block('try')
+        def except_block():
+            with p.head():
+                p.keyword('except')
+                exc = p.or_none.alias(p.expression)
+            exc_body = p.simple_body()
+            return Except(exc,exc_body)
+        def else_fn():
+            return p.simple_block('else')
+        def finally_fn():
+            return p.simple_block('finally')
+
+        def try1():
+            p.list(except_block,nonempty=True)
+            else_body = p.or_none(else_fn)
+            finally_body = p.or_none(finally_fn)
+            return Try(body,excepts,else_body,finally_body)
+        def try2():
+            finally_body = finally_fn()
+            return Try(body,None,None,finally_body)
+
+        return p.logical_xor(try1,try2)
+
+
+"""
+with_stmt ::=  "with" with_item ("," with_item)* ":" suite
+with_item ::=  expression ["as" target]
+"""
+
+"""
+funcdef                 ::=  [decorators] "def" funcname "(" [parameter_list] ")"
+                             ["->" expression] ":" suite
+decorators              ::=  decorator+
+decorator               ::=  "@" dotted_name ["(" [argument_list [","]] ")"] NEWLINE
+dotted_name             ::=  identifier ("." identifier)*
+parameter_list          ::=  defparameter ("," defparameter)* ["," [parameter_list_starargs]]
+                             | parameter_list_starargs
+parameter_list_starargs ::=  "*" [parameter] ("," defparameter)* ["," ["**" parameter [","]]]
+                             | "**" parameter [","]
+parameter               ::=  identifier [":" expression]
+defparameter            ::=  parameter ["=" expression]
+funcname                ::=  identifier
+"""
+
+"""
+classdef    ::=  [decorators] "class" classname [inheritance] ":" suite
+inheritance ::=  "(" [argument_list] ")"
+classname   ::=  identifier
+"""
+
+"""
+async_funcdef ::=  [decorators] "async" "def" funcname "(" [parameter_list] ")"
+                   ["->" expression] ":" suite
+"""
+
+"""
+async_for_stmt ::=  "async" for_stmt
+"""
+
+"""
+async_with_stmt ::=  "async" with_stmt
 """
 
 class CONSTANT:
@@ -2520,7 +2712,6 @@ class SetDisplay(Expr):
         self.body = body
     @staticmethod
     def build(p):
-        p = p.braces()
 
         def comprehension():
             comp = p.comprehension()
@@ -2529,7 +2720,8 @@ class SetDisplay(Expr):
         def starred_list_noexpr():
             return p.starred_list(as_expr=False)
 
-        return p.logical_xor(comprehension,starred_list_noexpr)
+        with p.braces():
+            return p.logical_xor(comprehension,starred_list_noexpr)
 
 class DictDisplay(Expr):
     """
@@ -2543,26 +2735,24 @@ class DictDisplay(Expr):
         self.body = body # DictComprehension | ((DoubleStarred(or_expr)|KVPair) list)
     @staticmethod
     def build(p):
-        with p.braces() as p:
+        def comprehension():
+            comp = p.build_node(DictComprehension)
+            return DictDisplay(comp)
+        def kv_pair():
+            key = p.expression()
+            p.token(':')
+            val = p.expression()
+            kv = KVPair(key,val)
+            return kv
+        def dict_expansion():
+            p.token('**')
+            e = DoubleStarred(p.or_expr())
+            return e
+        def key_datum_list(): # empty list is allowed
+            return DictDisplay(p.comma_list(kv_pair,dict_expansion))
 
-            def comprehension():
-                comp = p.build_node(DictComprehension)
-                return DictDisplay(comp)
-
-            def kv_pair():
-                key = p.expression()
-                p.token(':')
-                val = p.expression()
-                kv = KVPair(key,val)
-                return kv
-            def dict_expansion():
-                p.token('**')
-                e = DoubleStarred(p.or_expr())
-                return e
-            def key_datum_list(): # empty list is allowed
-                return DictDisplay(p.comma_list(kv_pair,dict_expansion))
-
-        return p.logical_xor(comprehension,key_datum_list)
+        with p.braces():
+            return p.logical_xor(comprehension,key_datum_list)
 
 
 
@@ -2824,8 +3014,9 @@ class NamedConstant(Lit):
             return NamedConstant(True)
         if p.or_false.keyword('False'):
             return NamedConstant(False)
-        p.keyword('None') # can throw synerr
-        return NamedConstant(None)
+        if p.or_false.keyword('None'):
+            return NamedConstant(None)
+        raise SyntaxError
 class Str(Lit):
     @staticmethod
     def build(p):
