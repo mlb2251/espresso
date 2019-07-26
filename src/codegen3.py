@@ -4,7 +4,7 @@
 # class Token: a parsed token. has some associated data
 # class AtomCompound, etc: These Atoms are AST components. Each has a .gentext() method that generates the actual final text that the atom should become in the compiled code
 # parse() is the main function here. It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
-from collections import namedtuple
+from collections import namedtuple,defaultdict
 from keyword import kwlist
 keywords = set(kwlist)
 
@@ -12,14 +12,67 @@ keywords = set(kwlist)
 """
 
 TODO
--Remake stmts, and decorate them all with
+-transition all Stmts to use build() for same reason as exprs -- so they can be initialized manually without a parser.
+-assert that end of line is reached after each stmt is parsed
+- add a .bnf field to all Nodes (where applicable)
+- make notes about how expression_list starred_expression and starred_list all yield Tuples or Exprs rather than python lists, unless as_expr=False is passed to them, and the LRM says this should only really be done for SetDisplay and ListDisplay. target_list, parameter_list, etc all yield python lists.
+    -youll want to make sure nodes with an (expression/starred)_(list/item) have a .val or .expr field not a .vals or .exprs field -- its gonna be a single value!
+-check for cases like "raise" [expression ["from" expression]] where there are nested [] and therefore you need to only ever try the inner ones in the outer ones fail
+-add BNF line to every Stmt and Expr and other Node that has an LRM BNF
+note: i guess we cut the _stmt postfix off most of our classes (Assignment instead of AssignmentStmt) bc they seem to needlessly add it to everything for BNF. Exception is ExpressionStmt includes Stmt.
+-switch all uses of parens() brackets() etc to `with` stmts
+- Make it so theres a .yield_expression() instead that does .build_node(yield_expression) and just do that for everything in the BNF. Maybe make an autogenerator based on all Nodes having a .bnf field that gives the string (not decorator-added, rather have it be a classic class field assignment thing). Then at the bottom of the module scan thru all globals() for things that are Nodes and check if they have bnf not-None and if so add their methods to Parser.
+- write documentation for everything at top of this file, as youve already started!
+-Remake stmts, and decorate them all
 -`Not` shd not be in UnopL bc of precedence
 -comp_for needs internal recursion as in LRM bc its used in generators too so unless you wanna track dependencies you gotta go verbatim
 -add the blank-to-None conversion for special cases like return stmts -- thats prob in the Return syntax already
+-make it so tok_like will match 'not   in' when asked about 'not in' etc. Generalize it for any whitespace in any string reducing to just one. Only try on initial failure to save a bit.
 -add autoinserted return None stmt at the end of fns
--make build(p,leftnode) to format
+-with AugAsn you need to ensure its a proper operator (not just BINOP eg not 'and') and ensure theres no whitespace captured by the regex after the operator, ie .data == .verbatim. This is all to avoid annoying parsing overhead with *= and such being tokens that have to come before the more common operators.
+-we need to deal with cases like AttributeRef where x.y is okay but x .y or x. y are not okay, likewise in import statement "mod1. mod2" is not okay. Basically i think this applies pretty consistently to certain tokens like '.' and maybe brackets. Could have a no_whitespace() contextmanager perhaps that changes the behavior of .tok to forbid whitespace.
+Quote stuff:
+    - Finish QUOTE1/QUOTE2 -> QUOTE merge
+    - HEREDOC token integrate
+    - Note that we choose to parse quotes ourselves without a single regex so we can do stuff like fstrings or custom equivalents better. Fstrings throw an error on f"{" for unclosed brace. Ofc the normal string "{" is not an error. So we should perhaps parse strings tokenwise as we have been, but with a prefix flag that tells it what special parsing to do.
+    - an alternative would be to use token style parsing for strings and merely use regexes for normal strings, but our system already has issues with multiline heredoc style regexes so really sticking to the other way would make more sense.
+    - fstrings:
+        f_string          ::=  (literal_char | "{{" | "}}" | replacement_field)*
+        replacement_field ::=  "{" f_expression ["!" conversion] [":" format_spec] "}"
+        f_expression      ::=  (conditional_expression | "*" or_expr)
+                                 ("," conditional_expression | "," "*" or_expr)* [","]
+                               | yield_expression
+        conversion        ::=  "s" | "r" | "a"
+        format_spec       ::=  (literal_char | NULL | replacement_field)*
+        literal_char      ::=  <any code point except "{", "}" or NULL>
+
 -Improve Lit parsing to cover all cases
+    -see QUOTE stuff above
+    -ints:
+        integer      ::=  decinteger | bininteger | octinteger | hexinteger
+        decinteger   ::=  nonzerodigit (["_"] digit)* | "0"+ (["_"] "0")*
+        bininteger   ::=  "0" ("b" | "B") (["_"] bindigit)+
+        octinteger   ::=  "0" ("o" | "O") (["_"] octdigit)+
+        hexinteger   ::=  "0" ("x" | "X") (["_"] hexdigit)+
+        nonzerodigit ::=  "1"..."9"
+        digit        ::=  "0"..."9"
+        bindigit     ::=  "0" | "1"
+        octdigit     ::=  "0"..."7"
+        hexdigit     ::=  digit | "a"..."f" | "A"..."F"
+    -floats:
+        floatnumber   ::=  pointfloat | exponentfloat
+        pointfloat    ::=  [digitpart] fraction | digitpart "."
+        exponentfloat ::=  (digitpart | pointfloat) exponent
+        digitpart     ::=  digit (["_"] digit)*
+        fraction      ::=  "." digitpart
+        exponent      ::=  ("e" | "E") ["+" | "-"] digitpart
+    -complex:
+        imagnumber ::= (floatnumber | digitpart) ("j" | "J")
+
 -Imporve Var parsing to cover all cases
+-The new plan is sh(whatever multiline whatever you want) and py(whatever multiline whatever you want). Basically theyre special builtins that you cant override ie kinda like keywords.
+    And `sh` with no immediate open paren will just continue to the end of the line
+-somethign to autocheck that all identify() are staticmethod and all build are staticmethod would be nice. Dont autoinsert it if people forget, then the code is less readable.
 -Figure out how Annotated class should work. Ofc it should basically be a Var. It should be able to wrap anything in the future i suppose. So maybe it should just be a fundamental part of a Node's label. These hard-annotations are done by the user and soft-annotations are figured out by the parser. HMMM but ok, right now annotations in python only apply to functions (we should maintain that but also allow it for certain other cases like assignment or perhapppps standalone / in a tuple x:int,y:int or even x,y:int as stmts. Basically a typehint stmt)
 -note that .annotate() cant be used on strings, making Var more convenient to use widely. If a string needs annotation it should be a Var instead.
 -Redo documentation to properly say what each type has for example for Arguments and Parameters:
@@ -32,20 +85,121 @@ TODO
 -maybe have token() return a Tok to make stuff like Compare better
 -Args and Formals probably want to be rewritten as __init__(etc etc etc) and build(p) so that they can be instantiated without parser.
 
+Don't worry .identify is always called with peek(), you dont need to manage that
+
+
+
+
+
 
 A Guide to our functions:
 
-p.exclusive_xor(*fns)
-p.comma_list(*fns)
-p.comma_list(*fns,nonempty=True)
-p.loop(*fns)
-p.or_none(*fns)
+.must # may be removed
+.not_none # may be removed **WAS REMOVED IN USAGE
+.or_none
+.or_false
+.or_fail # may be removed
+.or_(reval)
+
+Note any or_* function can be used like:
+    p.or_none.method_of_parser(*args,**kwargs)
+        e.g. p.or_none.parens()
+OR like:
+    p.or_none(any_argless_fn)
+        e.g. p.or_none(parse_arg_stage3)
+
+Combinators:
+.logical_xor(*fns)
+.list(*fns) - call logical_xor(*fns) in a loop and return a list of the results. Stop at first SynErr.
+.list(*fns,nonempty=True) - .list() but SynErr if returned list is length 0
+.comma_list(*fns) - like .list() but consumes a comma after each successful fn call. If unable to consume a comma or unable to successfully call any fn in `fns`, then terminate and return the list of results. (Allows trailing comma)
+.comma_list(*fns,nonempty=True) - .comma_list() but SynErr if returned list is length 0
+.build_node_delayed(*args,**kwargs) returns a argless function that calls .build_node(*args,**kwargs). Useful for generating argless closures for use in xor
+
+Internal:
+.next() - generally called internally to step .tok forward
+
+Primitives:
+.tok - current token
+.token(tok_like)
+.keyword(kw_str)
+.identifier()
+.empty()
+.assert_empty()
+
+BNF components:
+.parameter_list()
+.parameter_list(no_annotations=True) - param list in lambda fn
+.expression_list()
+.expression_nocond()
+.expression()
+.or_expr()
+.or_test()
+.primary()
+.starred_expression()
+.starred_list()
+.comprehension()
+.comp_for()
+.comp_if()
+.comp_iter()
+.target()
+.trunk_expr(, type)
+    'enclosure':List,Dict,Set,GeneratorExpr,YieldAtom,ParenForm # tightest binding
+    'atom':Var,Lit
+    'primary':AttributeRef,Subscript,Slicing,Call
+    'await_or_primary':AwaitExpr
+    'power':Exp,
+    'u_expr':UAdd,USub,Invert
+    'm_expr'Mul,Div,FloorDiv,Mod,MatMul
+    'a_expr':Add,Sub
+    'shift_expr':ShiftL,ShiftR
+    'and_expr':BitAnd,
+    'xor_expr':BitXor,
+    'or_expr':BitOr,
+    'comparison':Compare,
+    'not_test':Not,
+    'and_test':And,
+    'or_test':Or,
+    'conditional_expression':Ternary,
+    'expression':Lambda, # weakest binding
+
+
+.brackets()
+.braces()
+.parens()
+.quotes()
+.brackets()
+.colonlist(p)
+._atom_body(,atom_cls)
+._atom_head_body(,atom_cls)
+.argument_list()
+.target_list(p)
+.logical_xor(,*option_fns)
+.logical_xor(,*option_fns)
+.build_node(,nodeclass,leftnode=None,**kwargs)
+.stmt()
+
+
+Context managers:
+.peek() - always rewind stream, and reraise SynErr if it occurs
+.maybe() - rewind stream on SynErr, dont reraise SynErr
+
 
 
 make sure .assert_empty() is properly called everywhere
 
 
+Special Nodes:
+InitExpr(Expr) - an Expr with no build/identify functions so it must be created directly through __init__ (which takes whatever its components are, NOT a Parser.
+NodeGenerator(Node) - a Node which never shows up in the AST, when you call build() it just returns some other Expr/Stmt node, possibly from a range of options.
+AuxNode(Node) - Things like Parameters and Args that do not evaluate to a value and thus are not Exprs.
+AbstractExpr(Expr) - Things like Binop that never exist in the AST but are useful parent classes to have for isinstance() calls and inheritance.
 
+
+class decorators
+@left_recursive(left_type) -
+@gen_build(*args,**kwargs) -
+@binop(left_type,right_type) - shorthand for left_recursive and gen_build
 
 
 -(again at end) ensure all super().__init__() calls are done
@@ -66,6 +220,7 @@ Docs:
 
 _tokenize: (str with no newlines)->
 
+The following printing ASCII characters are not used in Python. Their occurrence outside string literals and comments is an unconditional error: $ ? `
 
 
 
@@ -78,6 +233,21 @@ Notes on performance with throwing/catching exceptions:
     TLDR yeah throwing/catching exceptions is slower but this whole return speed thing probably isn't the bottleneck in the program so its well worth the amazing benefits it brings.
 
 """
+
+
+    def __init__(self,x):
+        super().__init__()
+        self.x = x
+        self.x = x
+        self.x = x
+    @staticmethod
+    def build(p):
+        """
+        annotated_assignment_stmt ::=  augtarget ":" expression ["=" expression]
+        Returns Assignment | Var | AttributeRef | Subscription | Slicing (note how the Assignment "=" bit is optional)
+        """
+
+
 
 
 # TODO the next thing to do is get target, target_list, and starred expressions down really well in terms of what they mean and parsing, because they're super important.
@@ -106,7 +276,7 @@ GRAMMAR RULES
 4. If a,b are trunk expressions and `a` is more expressive than `b` (ie `a` is after `b` in the trunk list) then no `b ::=` production rules can contain `a` directly. Note that a `b` rule can contain a third element `c` which then yields `a` but it can't directly contain `a` itself. An important note is that the element `c` must yield a Node -- something like .comp_iter is merely a grammar feature and for all intents and purposes we substitute its definition into its location in the BNF rules. So if something like comp_iter or any other rule started with `a` that would be invalid unless the rule itself yields an expression node.
 Combining 2 and 3 we can say that at each decision point in the parsing process we can either determine via lookahead (often a single token) what non-trunk expression we have, and then if all lookaheads fail we can try the potential trunk expression and if that fails then we fail.
 
-Stmts are lookahead identifiable other than ExprStmt, Asn, AugAsn are very slightly more complex.
+Stmts are lookahead identifiable other than ExpressionStmt, Asn, AugAsn are very slightly more complex.
 
 
 
@@ -175,13 +345,14 @@ def locate(fn):
         return ret
     return wrapper
 
+
 class Parser():
     def __init__(self,elems):
         super().__init__()
         self.elems = elems # list of Tokens/Atoms
         self.idx = 0
         self.must = AssertCallWrapper(self)
-        self.not_none = NotNoneCallWrapper(self) # or_none is most encouraged
+        #self.not_none = NotNoneCallWrapper(self) # or_none is most encouraged
         self.or_none = Postprocessor(self,None) # or_none is most encouraged
         self.or_fail = Postprocessor(self,FAIL)
         self.or_false = Postprocessor(self,False)
@@ -197,10 +368,15 @@ class Parser():
         if self.idx >= len(self.elems):
             raise SyntaxError("Ran out of elems to consume")
         return self.elems[self.idx]
-
-    def comma_list(self,*fns,nonempty=False):
+    @property
+    def prev(self):
+        if self.idx-1 >= len(self.elems):
+            raise SyntaxError("Ran out of elems to consume")
+        return self.elems[self.idx-1]
+    def comma_list(self,*fns,nonempty=False,as_expr=False,allow_trailing_comma=True):
         """
         Decorator that calls fn() in a loop and returns a list of the results. List is empty if first call fails.
+        as_expr means the list will be turned into a Tuple, or else a non-tuple value if its a list of length 1 that didn't end in a comma
         """
         ret = []
         while True:
@@ -212,8 +388,15 @@ class Parser():
                 break
         if nonempty and len(ret) == 0:
             raise SyntaxError
+        if not allow_trailing_comma and self.prev.data == ',':
+            raise SyntaxError
+        if as_expr:
+            if len(ret) == 1 and self.prev.dat != ',':
+                return body[0] # eval to the single expression in the list
+            return Tuple(body)
+
         return ret
-    def loop(self,*fns):
+    def list(self,*fns,nonempty=False):
         """
         Decorator that calls fn() in a loop and returns a list of the results. List is empty if first call fails.
         """
@@ -223,6 +406,8 @@ class Parser():
                 ret.append(self.logical_xor(*fns))
             except SyntaxError:
                 break
+        if nonempty and len(ret) == 0:
+            raise SyntaxError
         return ret
     def token(self,tok_like):
         """
@@ -292,31 +477,36 @@ class Parser():
     ## BNF TYPES
     def parameter_list(self,no_annotations=False):
         return self.build_node(Parameters,no_annotations=no_annotations)
-    def expression_list(self):
-        return p.comma_list(p.expression,nonempty=True)
+    def expression_list(self,as_expr=True):
+        """
+        as_expr=True means return a Tuple or expression rather than a list of expressions. This is required in most cases.
+        "Except when part of a list or set display, an expression list containing at least one comma yields a tuple. The length of the tuple is the number of expressions in the list. The expressions are evaluated from left to right" -> applies to starred_expression and starred_list too.
+        """
+        return p.comma_list(p.expression,nonempty=True,as_expr=as_expr)
+    def starred_list(self,as_expr=True):
+        """
+        See `Parser.expression_list` for explanation of `as_expr`
+        """
+        def starred():
+            self.token('*')
+            return Starred(self.or_expr())
+        ret = comma_list(starred,self.expression,nonempty=True,as_expr=as_expr)
+    def starred_expression(self,as_expr=True):
+        """
+        See `Parser.expression_list` for explanation of `as_expr`
+        """
+        return self.starred_list(as_expr=as_expr)
     def expression_nocond():
         def lambda_expr():
             return self.build_node(Lambda,nocond=True)
         return self.logical_xor(lambda_expr,or_test)
-    def expression(self):
-        return self.trunk_expr('expression')
-    def or_expr(self):
-        return self.trunk_expr('or_expr')
-    def or_test(self):
-        return self.trunk_expr('or_test')
-    def primary(self):
-        return self.trunk_expr('primary')
-    def starred_expression(self):
-        def starred():
-            self.token('*')
-            return Starred(self.or_expr())
-        def unstarred():
-            return self.expression()
-        return comma_list(starred,unstarred,nonempty=True)
-
-    def starred_list(self):
-        return self.starred_expression()
-    def comp_for():
+    def comprehension():
+        """
+        comprehension ::=  expression comp_for
+        """
+        lhs = p.expression()
+        return p.build_node(Comprehension,lhs)
+    def comp_for(self):
         is_async = self.or_false.keyword('async')
         self.keyword('for')
         targets = self.target_list()
@@ -354,14 +544,17 @@ class Parser():
             self.token('*')
             return Starred(self.target())
 
-        # only possible remaining case is id/attr/subscript/slice
-        def primary_subtype():
-            e = self.primary()
-            if e not in [Var,Attr,Subscript,Slice]:
-                raise SyntaxError()
-            return e
+        return self.logical_xor(parens_or_brackets,starred,p.augtarget)
+    def augtarget(self):
+        """
+        augtarget     ::=  identifier | attributeref | subscription | slicing
+        """
+        e = self.primary()
+        if e not in [Var,AttributeRef,Subscript,Slicing]:
+            raise SyntaxError
+        return e
 
-        return self.logical_xor(parens_or_brackets,starred,primary_subtype)
+    # these are all contextmanagers that yield parsers that parse the contents, and also confirm that those parsers ran to completion
     def brackets(self):
         return self._atom_body(ABracket)
     def braces(self):
@@ -372,19 +565,40 @@ class Parser():
         return self._atom_body(AQuote)
     def brackets(self):
         return self._atom_body(ABracket)
-    def colonlist(p):
-        return _atom_head_body(AColonList)
+    def colonlist(self):
+        return self._atom_head_body(AColonList)
+    def mark_poison(self):
+        def poison_message(*args,**kwargs):
+            raise Exception("A parser is being used after being marked as poisoned. This might happen if the parser yielded by `with p.brackets() as p:` was then used after the end of the `with` block (the variable returned in the `as` syntax actually leaks out into the enclosing scope in Python)")
+        # make it so pretty much any use of this parser raises an error
+        self.__getattr__ = poison_message
+    @contextmanager
     def _atom_body(self,atom_cls):
         if not isinstance(p.tok,atom_cls):
             raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
-        ret = Parser(p.tok.body)
-        p.next()
-        return ret
+        p = Parser(p.tok.body)
+        try:
+            yield p # contextmanager yields parser
+        finally:
+            p.mark_poison()
+        # the following only runs if no SynErr is raised in the whole `with` block
+        if not p.empty():
+            raise SyntaxError(f"Unparsed remaining contents of a {atom_cls} is an error")
+        self.next() # step forward past this compound atom
     def _atom_head_body(self,atom_cls):
         if not isinstance(p.tok,atom_cls):
             raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
-        ret = Parser(p.tok.head),Parser(p.tok.body)
-        p.next()
+        head_parser,body_parser = Parser(p.tok.head),Parser(p.tok.body)
+        try:
+            yield (head_parser,body_parser) # contextmanager
+        finally:
+            head_parser.mark_poison()
+            body_parser.mark_poison()
+        if not head_parser.empty():
+            raise SyntaxError("CompoundAtom's head parser has unparsed contents remaining")
+        if not body_parser.empty():
+            raise SyntaxError("CompoundAtom's body parser has unparsed contents remaining")
+        self.next()
         return ret
     def argument_list(self):
         return self.build_node(Arguments)
@@ -413,21 +627,38 @@ class Parser():
             return fn() # we gotta actually execute it for real now since we just peek()'d before
         raise SyntaxError # 0 matches
     ## BUILDING AND IDENTIFYING ODES
+    def build_node_delayed(self,*args,**kwargs):
+        def fn():
+            return build_node(*args,**kwargs)
+        return fn
     def build_node(self,nodeclass,leftnode=None,**kwargs):
-        assert not isinstance(nodeclass,InitExpr)
-        assert hasattr(nodeclass,'build') or hasattr(nodeclass,'identify')
+        assert not issubclass(nodeclass,InitExpr), f"Can't use build_node with {nodeclass} because it's an InitExpr. Most likely you want to find a NodeGenerator that builds this InitExpr and call that."
+        assert hasattr(nodeclass,'build') or hasattr(nodeclass,'identify'), f"{nodeclass} must have either build() or identify() methods"
+
+        def output_check(node):
+            assert node is not None, f"{nodeclass}.build() returned None, you probably forgot to return the built node"
+            if not isinstance(node,NodeGenerator):
+                assert type(node) == nodeclass, f"{nodeclass}.build() did not return an expression of type {nodeclass}. This is only allowed in NodeGenerators and is otherwise likely unintentional"
+
         # identify() case
         if hasattr(nodeclass,identify):
             with self.peek(): # will reset token stream but wont catch errors
-                cls = nodeclass.not_none.identify(self) # may throw SyntaxError
-            return self.not_none.build_node(cls,leftnode=leftnode,**kwargs)
-        # non identify() case
+                cls = nodeclass.identify(self) # may throw SyntaxError
+                if cls is None:
+                    raise SyntaxError
+            node = self.build_node(cls,leftnode=leftnode,**kwargs)
+            return node
+
+        # left_recursive case
         if isinstance(nodeclass,Expr) and nodeclass.left_recursive:
-            assert leftnode is not None
+            assert leftnode is not None, "Can't call build_node on a left_recursive node without a non-None leftnode"
             node = nodeclass.build(self,leftnode=leftnode,**kwargs)
-        else:
-            assert leftnode is None
-            node = nodeclass.build(self,**kwargs)
+            assert node is not None, f"{nodeclass}.build returned None"
+            return node
+
+        # not left_recursive case
+        assert leftnode is None, "Can't call build_node on a NON left_recursive node with a non-None leftnode"
+        node = nodeclass.build(self,**kwargs)
         assert node is not None, f"{nodeclass}.build returned None"
         return node
     def trunk_expr(self, type):
@@ -443,9 +674,7 @@ class Parser():
         non_recursive = []
         for cls in nodeclasses:
             if not nodeclass.left_recursive:
-                def build_fn():
-                    return self.build_node(cls)
-                non_recursive.append(build_fn)
+                non_recursive.append(self.build_node_delayed(cls))
 
         node = self.logical_xor(*non_recursive) # this can throw synerr
 
@@ -456,9 +685,8 @@ class Parser():
             left_recursive = []
             for cls in nodeclasses:
                 if nodeclass.left_recursive and ty in nodeclass.left_types:
-                    def build_fn():
-                        return self.build_node(cls,leftnode=node) # <- key difference is leftnode
-                    non_recursive.append(build_fn)
+                    # key difference is `leftnode=node`
+                    non_recursive.append(self.build_node_delayed(cls,leftnode=node))
 
             node_or_none = self.or_none.logical_xor(*non_recursive)
             if node is None: # exit on failure to expand more
@@ -470,6 +698,34 @@ class Parser():
                 break
 
         return node
+    def stmt(self):
+        """
+        Same deal as trunk_expr have something like an @decorator for labelling class with a keyword
+        """
+        if isinstance(self.tok,AColonList):
+            # compound statement
+            potential_kw = self.tok.head[0]
+            kw = None if potential_kw.typ is not KEYWORD else potential_kw.data
+            classes = compound_stmt_nodes[kw]
+        else:
+            # simple statement
+            potential_kw = self.tok
+            kw = None if potential_kw.typ is not KEYWORD else potential_kw.data
+            classes = simple_stmt_nodes[kw]
+
+        if len(classes) == 0:
+            raise SyntaxError(f"No valid classes found for leading keyword {potential_kw}"
+
+        build_fns = []
+        for cls in classes:
+            build_fns.append(self.build_node_delayed(cls))
+
+        return p.logical_xor(*build_fns)
+    def __getattr__(self,key):
+        if key in trunk_nodes: # automatically adds methods for all trunk nodes!
+            return self.trunk_expr(key)
+        return object.__getattribute__(self,key)
+
 
 class Postprocessor:
     """
@@ -480,39 +736,50 @@ class Postprocessor:
         self.parser = parser
         self.retval = retval
     def __call__(self,fn):
+        """
+        Use like p.or_none(some_fn)
+        Note some_fn must take no arguments
+        """
         idx = self.parser.idx
         try:
-            return fn(*args,**kwargs)
+            return fn()
         except SyntaxError:
             self.parser.idx = idx
             return self.retval
     def __getattr__(self,key):
+        """
+        A shorthand for or_none(some_fn) which also allows some_fn to take arguments rather than having an empty arg list. Note this only works for functions that are methods of `Parser`. Otherwise you need to use or_none(some_argless_fn).
+        ret = p.or_none.some_fn(*args,**kwargs)
+        is the same as:
+        def argless_fn():
+            p.some_fn(*args,**kwargs)
+        ret = p.or_none(argless_fn)
+        p.or_none(some_fn_argless)
+        """
         fn = getattr(self.parser,key)
-        def wrapper(*args,**kwargs):
-            idx = self.parser.idx
-            try:
-                return fn(*args,**kwargs)
-            except SyntaxError:
-                self.parser.idx = idx
-                return self.retval
-        return wrapper
+        assert callable(fn)
+        def ret(*args,**kwargs): # wrapper that takes any args
+            def argless_fn(): # quickly define an argless function
+                fn(*args,**kwargs)
+            return self(argless_fn) # call it with __call__ to do the normal `retval` and stream reset stuff
+        return ret
 
-class NotNoneCallWrapper:
-    """
-    Assert that return value is not None -- real crash (not SyntaxError)
-    If the fn returns a SyntaxError is avoids this and nothing happens (intentionally)
-    """
-    def __init__(self,parser):
-        super().__init__()
-        self.parser = parser
-    def __getattr__(self,key):
-        fn = getattr(self.parser,key)
-        def wrapper(*args,**kwargs):
-            idx = self.parser.idx
-            ret = fn(*args,**kwargs)
-            assert ret is not None
-            return ret
-        return wrapper
+#class NotNoneCallWrapper:
+#    """
+#    Assert that return value is not None -- real crash (not SyntaxError)
+#    If the fn returns a SyntaxError is avoids this and nothing happens (intentionally)
+#    """
+#    def __init__(self,parser):
+#        super().__init__()
+#        self.parser = parser
+#    def __getattr__(self,key):
+#        fn = getattr(self.parser,key)
+#        def wrapper(*args,**kwargs):
+#            idx = self.parser.idx
+#            ret = fn(*args,**kwargs)
+#            assert ret is not None
+#            return ret
+#        return wrapper
 
 class AssertCallWrapper:
     """
@@ -692,7 +959,7 @@ def atomize(tokenized_lines, interpreter):
         while stack[-1].lineend_trypop(linedata) is True: # any necessary end of line processing
             pop()
     # Now we autodedent plenty
-    while len(stack) > 1 and isinstance(stack[-1],AStmtList):
+    while len(stack) > 1 and isinstance(stack[-1],ACompoundStmt):
         pop()
     if len(stack) > 1:
         if interpreter:
@@ -735,11 +1002,11 @@ class Atom(LocTagged):
         return False
     def finish(self):
         """
-        Figuring out our start and end locations in the original text. Start location is based on the token that created us for Atoms that aren't AStmtLists, for AColonList it's the start of the head, for AMasterList it's line 1 char 1.
+        Figuring out our start and end locations in the original text. Start location is based on the token that created us for Atoms that aren't ACompoundStmts, for AColonList it's the start of the head, for AMasterList it's line 1 char 1.
         """
 
         # loc.start
-        if isinstance(self,AStmtList):
+        if isinstance(self,ACompoundStmt):
             self.finish_stmt() # finish stmt, this is our last chance
             if isinstance(self,AColonList):
                 self.loc_start(self.head[0])
@@ -756,7 +1023,7 @@ class Atom(LocTagged):
                 self.loc_end(self.start_tok) # the ':'
             if isinstance(self,AMasterList):
                 self.loc_end(Loc(1,2))
-            else: # non AStmtList
+            else: # non ACompoundStmt
                 self.loc_end(self.start_tok)
 
         self.finished = True # must come after self.finish_stmt()
@@ -764,7 +1031,16 @@ class Atom(LocTagged):
         body = ' '.join([repr(elem) for elem in self.body])
         return u.mk_b(f"{self.name}(") + f"{body}" + u.mk_b(")")
 
-class AStmtList(Atom):
+class AStmt(Atom):
+    """
+    .body: (Atom|Tok) list
+    """
+    pass
+
+class ACompoundStmt(Atom):
+    """
+    .head: (Atom|Tok) list | None  -- None if AMasterList
+    """
     def __init__(self,tok):
         super().__init__(tok)
         self.curr_stmt = []
@@ -781,9 +1057,9 @@ class AStmtList(Atom):
             self.curr_stmt.append(tok)
     # so that AColonList can steal its lhs from us if it wants
     def pop_curr_stmt(self):
-        tmp = self.curr_stmt
+        ret = self.curr_stmt
         self.curr_stmt = []
-        return tmp
+        return ret
     def lineend_trypop(self,linedata):
         self.finish_stmt()
         return False
@@ -798,17 +1074,17 @@ class AStmtList(Atom):
         res += ':'
         for line in self.body:
             res += f'\n'
-            if len(line) == 1 and isinstance(line[0],AStmtList):
+            if len(line) == 1 and isinstance(line[0],ACompoundStmt):
                 res += line[0].repr_depth(depth=depth+1) # print stmt list
             else:
                 res += f'{block_indent}' # only need for nonstmtlists bc stmtlists handle indents themselves
                 for elem in line: # print a line full of non-stmtlist elements
-                    assert not isinstance(elem,AStmtList), "AStmtList should only appear as the only element on a line if it appears"
+                    assert not isinstance(elem,ACompoundStmt), "ACompoundStmt should only appear as the only element on a line if it appears"
                     res += repr(elem) + ' '
                 res = res[:-1] # kill last space
         return res
 
-class AMasterList(AStmtList):
+class AMasterList(ACompoundStmt):
     def __init__(self):
         super().__init__(None) # There is no token that created AMasterList
         self.allowed_children = COMMON_ALLOWED_CHILDREN | {COLON} # set union
@@ -820,7 +1096,7 @@ class AMasterList(AStmtList):
 
 SEMICOLONS_ONLY = -1
 
-class AColonList(AStmtList):
+class AColonList(ACompoundStmt):
     def __init__(self,tok,linedata,head):
         super().__init__()
         self.prev_leading_whitespace = linedata.leading_whitespace # this is the indent on the line ending with a ':', so it's not actually the indent level of the block
@@ -925,88 +1201,18 @@ class ASH(Atom):
         if self.closer == NEWLINE:
             return True
         return False
-#class ACommaList(Atom):
-#    def __init__(self):
-#        self.allowed_children = COMMON_ALLOWED_CHILDREN
-
-
-# fundamentally {} (and some other syntaxes) are used for expr lists and ':' are used for stmt lists
-
-
-# check if the elem at index `idx` in statment `stmt` exists AND is a token AND is a keyword AND is the specific keyword `kw`
-def iskeyword(stmt,idx,kw):
-    if len(stmt) <= idx: # idx doesnt exist in stmt
-        return False
-    x = stmt[idx]
-    if not isinstance(x,Tok): # must be a Tok in order to be a keyword
-        return False
-    if x.typ != KEYWORD:
-        return False
-    if x.data != kw:
-        return False
-    return True
-
-def istoken(stmt,idx,typ_or_list):
-    if len(stmt) <= idx: # idx doesnt exist in stmt
-        return False
-    x = stmt[idx]
-    if not isinstance(x,Tok): # must be a Tok in order to be a keyword
-        return False
-    if isinstance(typ_or_list,list):
-        if x.typ not in typ_or_list:
-            return False
-    else:
-        if x.typ != typ:
-            return False
-    return True
-
-# returns None if no leading keyword
-def get_leading_keyword(elems):
-    if len(elems) == 0:
-        return None
-    x = elems[0]
-    if not isinstance(x,Tok):
-        return None
-    if x.typ != KEYWORD:
-        return None
-    return x.data
 
 """
 Note the advanced class decorator they suggested is not great.
 A better one would just be a fn that replaces Foo.fn = thedecorator(Foo.fn) instead of crazy getattribute stuff. It can use types to figure out what attrs are functions.
 """
 
-def stmt(self):
-    """
-    Same deal as trunk_expr have something like an @decorator for labelling class with a keyword
-    """
-    if isinstance(self.tok,AColonList):
-        # compound statement
-        potential_kw = self.tok.head[0]
-        kw = None if potential_kw.typ is not KEYWORD else potential_kw.data
-        classes = compound_stmt_nodes[kw]
-    else:
-        # simple statement
-        potential_kw = self.tok
-        kw = None if potential_kw.typ is not KEYWORD else potential_kw.data
-        classes = simple_stmt_nodes[kw]
-
-    if len(classes) == 0:
-        raise SyntaxError(f"No valid classes found for leading keyword {potential_kw}"
-
-    build_fns = []
-    for cls in classes:
-        def build_fn():
-            return self.build_node(cls)
-        build_fns.append(build_fn)
-
-    return p.logical_xor(*build_fns)
 
 #    # simple statements that don't start with keywords
 #    e, rest = expr(elems)
-#    # ExprStmt
+#    # ExpressionStmt
 #    if rest == []:
-#        return ExprStmt(elems) # to make a .identify for this probably just have it run .expr_assert_empty with fail=BOOL or whatever
+#        return ExpressionStmt(elems) # to make a .identify for this probably just have it run .expr_assert_empty with fail=BOOL or whatever
 #    # Asn
 #    if istoken(rest,0,EQ):
 #        return Asn(elems)
@@ -1022,7 +1228,7 @@ note: don't worry if you see stuff like ABracket being translated into a dict al
 """
 
 
-# class decorator that takes an argument
+# fn that returns a class decorator
 def left_recursive(left_type):
     """
     left_type is the trunk type of the left hand expression that it is valid for us to expand on.
@@ -1034,7 +1240,19 @@ def left_recursive(left_type):
         return cls
     return class_decorator
 
-from collections import defaultdict
+# super simple decorator class Add:pass then Add.gen_build('m_expr') is the same as @gen_build('m_expr') then class Add:pass
+def gen_build(*args,**kwargs):
+    def class_decorator(cls):
+        assert hasattr(cls,'gen_build')
+        assert isinstance(cls.gen_build,classmethod)
+        cls.build = cls.gen_build(*args,**kwargs)
+        assert cls.build is not None, f"{cls}.gen_build() returned None instead of a function"
+        if not isinstance(cls.build,staticmethod):
+            cls.build = staticmethod(cls.build) # wraps in staticmethod for convenience if you forgot
+        return cls
+    return class_decorator
+
+
 simple_stmt_nodes = defaultdict(list)
 compound_stmt_nodes = defaultdict(list)
 # `None` is the key for no leading kw
@@ -1049,6 +1267,7 @@ def simple(*kws):
         cls.leading_kws = kws
         cls.type = 'simple'
         [simple_stmt_nodes[kw].append(cls) for kw in kws]
+        assert len(kws) != 0, "Please specify at least one leading keyword in @simple(*kws). Specify None if there is not leading keyword"
     return class_decorator
 
 # class decorator for Stmts
@@ -1061,6 +1280,7 @@ def compound(*kws):
         cls.leading_kws = kws
         cls.type = 'compound'
         [compound_stmt_nodes[kw].append(cls) for kw in kws]
+        assert len(kws) != 0, "Please specify at least one leading keyword in @compound(*kws). Specify None if there is not leading keyword"
         return cls
     return class_decorator
 
@@ -1079,12 +1299,14 @@ class Expr(Node):
         self.annotation = annotation
         return self
 
-# an Expr with no build/identify functions
+# An Expr with no build/identify functions so it must be created directly through __init__ (which takes whatever its components are, NOT a Parser.
 class InitExpr(Expr): pass
-# an Expr which never shows up in the AST
-class SynExpr(Expr): pass
-# Syntatic Element. Things like Formals that are neither Exprs nor Stmts
-class SynNode(Node): pass
+# A Node which never shows up in the AST, when you call build() it just returns some other Expr/Stmt node, possibly from a range of options.
+class NodeGenerator(Expr): pass
+# Things like Parameters and Args that do not evaluate to a value and thus are not Exprs.
+class AuxNode(Node): pass
+# Things like Binop that never exist in the AST but are useful parent classes to have for isinstance() calls and inheritance. Unlike NodeGenerator the things it produces are actual children of it.
+class AbstractExpr(Expr): pass
 
 
 
@@ -1124,9 +1346,12 @@ def trunk_type_of_node(node):
 
 
 trunk_nodes = {
-        'enclosure':List,Dict,Set,GeneratorExpr,YieldAtom,ParenForm # tightest binding
+        """
+        Note contents of 'enclosure' are all converted from BNF form like so: some_name -> SomeName
+        """
+        'enclosure':ListDisplay,DictDisplay,SetDisplay,GeneratorExpression,YieldAtom,ParenthForm # tightest binding
         'atom':Var,Lit
-        'primary':Attr,Subscript,Slice,Call
+        'primary':AttributeRef,SubscriptOrSlicing,Slicing,Call
         'await_or_primary':AwaitExpr
         'power':Exp,
         'u_expr':UAdd,USub,Invert
@@ -1150,7 +1375,7 @@ trunk_nodes = {
 
 
 
-# TODO note that the .usage of things often isn't known when they're created initially, and is rather added during left-recursion when the target becomes part of a larger statement. So it should really be up to the larger statement to update the .usage for its targets. In other cases it is known when you call expr() for example when already inside a larger statement and calling expr to construct a nonleftrecursive smaller expr. Also ExprStmt for example could set things to LOAD, etc.
+# TODO note that the .usage of things often isn't known when they're created initially, and is rather added during left-recursion when the target becomes part of a larger statement. So it should really be up to the larger statement to update the .usage for its targets. In other cases it is known when you call expr() for example when already inside a larger statement and calling expr to construct a nonleftrecursive smaller expr. Also ExpressionStmt for example could set things to LOAD, etc.
 
 
 
@@ -1203,7 +1428,7 @@ Non unop/binop expressions:
 
 """
 
-Var List Tuple Starred Attr Subscript should assert that .usage is not None when provided
+Var List Tuple Starred AttributeRef Subscript should assert that .usage is not None when provided
 
 
 Non unop/binop expressions:
@@ -1301,13 +1526,13 @@ With:
       .contextmanager: Expr
       .targets: Reference # specifically Var | Tuple | List
         # the result of evaluating .contextmanager is assigned to .variables or something i think (if they arent None)
-ExprStmt:
+ExpressionStmt:
     .expr: Expr
 Asn:
     .targets: [Reference]
     .val: Expr
 AugAsn:
-    .target: Name | Subscript | Attribute (not Tuple | List)
+    .target: Name | Subscript | AttributeRefibute (not Tuple | List)
     .op: BINOP
     .val: Expr
 Module:
@@ -1364,7 +1589,7 @@ Compare:
     .vals:[Expr]
     # e.g. `a > b > c`
 Call:
-    .func: Name | Attr | some other stuff
+    .func: Name | AttributeRef | some other stuff
     .args: [Expr]
     .keywords: [Keyword]
   Keyword(namedtuple):
@@ -1374,7 +1599,7 @@ Ternary:
     .cond: Expr
     .if_branch: Expr
     .else_branch: Expr
-Attr:
+AttributeRef:
     .expr: Expr
     .attr: str
     .usage: USAGE
@@ -1382,7 +1607,7 @@ Subscript:
     .expr: Expr
     .index: Expr
     .usage: USAGE
-Slice:
+Slicing:
     .expr: Expr
     .start: Expr
     .stop: Expr
@@ -1425,8 +1650,8 @@ Yield: # yes, this is actually an expression
 USAGE = LOAD | STORE | DEL
 
 
-Target = Var | Attr | Subscript | Slice | '*' Target
-Reference = Var | Attribute | Subscript
+Target = Var | AttributeRef | Subscript | Slicing | '*' Target
+Reference = Var | AttributeRefibute | Subscript
 
 
 """
@@ -1509,7 +1734,8 @@ class Stmt(Node): # abstract
         """
         return False
 
-## Stmts that take an AColonList as input
+## Compound Statements
+
 @leading_kw('def')
 class FuncDef(Stmt):
     def __init__(self,name,args,body):
@@ -1527,6 +1753,7 @@ class FuncDef(Stmt):
         body = body.stmts()
         body.assert_empty()
         return FuncDef(name,args,body)
+
 
 class Module(Stmt):
     def __init__(self,compound):
@@ -1569,12 +1796,12 @@ class ClassDef(Stmt):
 #    res.append(elems[prev_comma_idx+1:])
 #    return res
 
-class Arg(SynNode):
+class Arg(AuxNode):
     def __init__(self,name):
         super().__init__()
         self.name = name
 
-class Arguments(SynNode):
+class Arguments(AuxNode):
     def __init__(self,args):
         self.args = args
     @staticmethod
@@ -1616,7 +1843,7 @@ class Arguments(SynNode):
         p.assert_empty()
         return Arguments(args)
 
-class Parameters(SynNode):
+class Parameters(AuxNode):
     def __init__(self,args,stararg,kwonlyargs,doublestararg):
         super().__init__()
         self.args = args
@@ -1811,7 +2038,7 @@ class With(Stmt):
         if len(self.withitems) == 0
             raise SyntaxError("empty `with` statement header")
         self.body = stmts(compound.body)
-class Withitem(SynNode):
+class Withitem(AuxNode):
     def __init__(self,contextmanager,target):
         super().__init__()
         self.contextmanager = contextmanager
@@ -1827,40 +2054,12 @@ class Try(Stmt):
 
 
 
-## Stmts that take an elem list as input
-class Return(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-
-        elems = keyword(elems,"return")
-        self.val,elems = expr(elems)
-        empty(elems)
-class Pass(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-
-        elems = keyword(elems,"pass")
-        empty(elems)
-class Raise(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-        self.exception = None
-        self.cause = None
-
-        elems = keyword(elems,"raise")
-        if not empty(elems,fail=BOOL):
-            self.exception,elems = expr(elems)
-        if not empty(elems,fail=BOOL):
-            elems = keyword(elems,'from')
-            notempty(elems) # TODO it's important to have guards like this since otherwise an empty expr might just eval to None which Python does not do. This is along the lines of expr_assert_empty except like a expr_preassert_nonempty except with a better name. Oh also if there are random symbols for example that dont make up an expr then expr should tell us it couldnt make anything.
-            self.cause,elems = expr(elems)
-        empty(elems)
-
+## Simple Statements
 
 # `by` and `till` strings, tokens, or functions
 # VERY IMPORTANT: if you split by commas in particular, the final sublist will be discarded if it is an empty list. This is because this is the desired behavior the vast majority of the time (for example foo(a,) is a valid function call on the argument `a` (NOT the tuple `(a,)`). Likewise `def foo(a,)` is allowed, `lambda x,:` is allowed.
 # Also throws an error if there are two commas in a row only applies to `by`=',' again
-"""CAREFUL. split should never be used if an expr may be somewhere inside whatever you're splitting. Because for example commas within lambda expressions are valid, or colons within lambdas -- if you split by commas or colons (e.g. when parsing slicing) it would get messed up. See examples of code like in Slice parsing for how to properly deal with these cases"""
+"""CAREFUL. split should never be used if an expr may be somewhere inside whatever you're splitting. Because for example commas within lambda expressions are valid, or colons within lambdas -- if you split by commas or colons (e.g. when parsing slicing) it would get messed up. See examples of code like in Slicing parsing for how to properly deal with these cases"""
 def unsafe_split(): # [elem] -> [[elem]]
     raise NotImplementedError
 
@@ -1875,7 +2074,289 @@ def join(): # [[elem]] -> [elem]
 def raw_string():
     raise NotImplementedError
 
+@simple(None)
+class ExpressionStmt(Stmt):
+    def __init__(self,expr):
+        super().__init__()
+        self.expr = expr
+    @staticmethod
+    def build(p):
+        expr = p.starred_expression()
+        return ExpressionStmt(expr)
+
+
+
+@simple(None)
+class Assignment(Stmt):
+    def __init__(self,targets,val):
+        super().__init__()
+        self.targets = targets
+        self.val = val
+    @staticmethod
+    def build(p):
+        """
+        assignment_stmt ::=  (target_list "=")+ (starred_expression | yield_expression)
+        """
+        def target_lists():
+            p.target_list()
+            p.token('=')
+        targets = p.list(target_list,nonempty=True)
+        val = p.logical_xor(p.starred_expression,p.build_node_delayed(YieldExpression))
+        return Assignment(targets,val)
+
+AUGOPS = ["+" , "-" , "*" , "@" , "/" , "//" , "%" , "**" , ">>" , "<<" , "&" , "^" , "|"]
+
+@simple(None)
+class AugAsn(Stmt):
+    """
+    augmented_assignment_stmt ::=  augtarget augop (expression_list | yield_expression)
+    augtarget                 ::=  identifier | attributeref | subscription | slicing
+    augop                     ::=  "+=" | "-=" | "*=" | "@=" | "/=" | "//=" | "%=" | "**="
+                                   | ">>=" | "<<=" | "&=" | "^=" | "|="
+    """
+    def __init__(target,op,val):
+        super().__init__()
+        self.target = target
+        self.op = op # + - etc without the equals sign
+        self.val = val
+    @staticmethod
+    def build(p):
+        target = p.augtarget()
+
+        # dealing with operator
+        op = p.tok.typ
+        no_trailing_ws = (len(p.tok.verbatim) == len(p.tok.data))
+        p.token(AUGOPS)
+        if not no_trailing_ws: # e.g. "+ ="
+            raise SyntaxError
+        p.token("=")
+
+        val = p.logical_xor(p.expression_list,p.build_node_delayed(YieldExpression))
+        return Assignment(target,op,val)
+
+@simple(None)
+class AnnotatedAssignment(NodeGenerator):
+    @staticmethod
+    def build(p):
+        """
+        annotated_assignment_stmt ::=  augtarget ":" expression ["=" expression]
+        Returns Assignment | Var | AttributeRef | Subscription | Slicing (note how the Assignment "=" bit is optional)
+        """
+        target = p.augtarget()
+        p.token(':')
+        target.annotate(p.expression())
+        def asn():
+            p.token('=')
+            return p.expression()
+        val = p.or_none(asn)
+        if val is None:
+            return target
+        return Assignment([target],val)
+
+
+@simple('assert')
+class Assert(Stmt):
+    def __init__(self,expr,msg):
+        super().__init__()
+        self.expr = expr
+        self.msg = msg
+    @staticmethod
+    def build(p):
+        """
+        assert_stmt ::=  "assert" expression ["," expression]
+        """
+        p.keyword('assert')
+        expr = p.expression
+        def msg():
+            p.token(',')
+            return p.expression()
+        msg = p.or_none(msg)
+        return Assert(expr,msg)
+
+@simple('pass')
+class Pass(Stmt):
+    @staticmethod
+    def build(p):
+        """
+        pass_stmt ::=  "pass"
+        """
+        p.keyword('pass')
+        return Pass()
+
+@simple('del')
+class Del(Stmt):
+    def __init__(self,targets):
+        super().__init__()
+        self.targets = targets
+    @staticmethod
+    def build(p):
+        """
+        del_stmt ::=  "del" target_list
+        """
+        p.keyword('del')
+        targets = p.target_list()
+        return Del(targets)
+
+@simple('return')
+class Return(Stmt):
+    def __init__(self,expr):
+        super().__init__()
+        self.expr = expr
+    @staticmethod
+    def build(p):
+        """
+        return_stmt ::=  "return" [expression_list]
+        If an expression list is present, it is evaluated, else None is substituted.
+        """
+        p.keyword('return')
+        expr = p.or_(NamedConstant(None)).expression_list()
+        return Return(expr)
+
+@simple('yield')
+class Yield(Stmt):
+    def __init__(self,yield_expr):
+        super().__init__()
+        self.yield_expr = yield_expr
+    @staticmethod
+    def build(p):
+        """
+        yield_stmt ::=  yield_expression
+        """
+        yield_expr = p.build_node(YieldExpression)
+        return Yield(yield_expr)
+
+@simple('raise')
+class Raise(Stmt):
+    def __init__(self,exc,from_exc):
+        super().__init__()
+        self.exc = exc # expression | None
+        self.from_exc = from_exc # expression | None
+    @staticmethod
+    def build(p):
+        """
+        raise_stmt ::=  "raise" [expression ["from" expression]]
+        """
+        p.keyword('raise')
+        exc = p.or_none.expression()
+        if exc is None:
+            return Raise(None,None) # deals with nested bnf brackets
+        def from_exc_fn():
+            p.keyword('from')
+            return p.expression()
+        from_exc = p.or_none(from_exc_fn)
+
+        return Raise(exc,from_exc)
+
+@simple('break')
+class Break(Stmt):
+    @staticmethod
+    def build(p):
+        """
+        break_stmt ::=  "break"
+        """
+        p.keyword('break')
+        return Break()
+
+@simple('continue')
+class Continue(Stmt):
+    @staticmethod
+    def build(p):
+        """
+        continue_stmt ::=  "continue"
+        """
+        p.keyword('continue')
+        return Continue()
+
+@simple('import','from')
 class Import(Stmt):
+    def __init__(self,):
+        super().__init__()
+        self.
+        self.
+    @staticmethod
+    def build(p):
+        """
+        import_stmt     ::=  "import" module ["as" identifier] ("," module ["as" identifier])*
+                     | "from" relative_module "import" identifier ["as" identifier]
+                     ("," identifier ["as" identifier])*
+                     | "from" relative_module "import" "(" identifier ["as" identifier]
+                     ("," identifier ["as" identifier])* [","] ")"
+                     | "from" module "import" "*"
+        module          ::=  (identifier ".")* identifier
+        relative_module ::=  "."* module | "."+
+
+        """
+        def module(): # returns (str list)
+            """ module ::=  (identifier ".")* identifier """
+            def fn():
+                name = p.identifier()
+                p.token('.')
+                return name
+            with p.no_whitespace():
+                return p.list(fn) + [p.identifier()]
+        def relative_module(): # returns tuple(ndots,(str|None))
+            """ relative_module ::=  "."* module | "."+ """
+            def dot():
+                p.token('.')
+            ndots = len(p.list(dot))
+            mod = p.or_none(module)
+            if mod is None and ndots == 0:
+                raise SyntaxError
+            return ndots,mod
+        def as_id():
+            p.keyword('as')
+            return p.identifier()
+        def mod_as_id(): # returns tuple((str list),str)
+            """ module ["as" identifier] """
+            mod = module()
+            as_ident = p.or_none(as_id)
+            return mod,as_ident
+        def id_as_id(): # returns tuple((str list),str)
+            """ identifier ["as" identifier] """
+            id1 = p.identifier()
+            id2 = p.or_none(as_id)
+            return id1,id2
+
+        def import_stmt1(): # returns (import_as list)
+            """ "import" module ["as" identifier] ("," module ["as" identifier])* """
+            p.keyword('import')
+            return p.list(mod_as_id,allow_trailing_comma=False,nonempty=True)
+        def import_stmt2(): # returns tuple(relative_module, import_as list)
+            """ "from" relative_module "import" identifier ["as" identifier] ("," identifier ["as" identifier])*
+            note theres no module() call this time it's identifier() instead
+            """
+            p.keyword('from')
+            rel_mod = relative_module()
+            p.keyword('import')
+            imports = p.list(id_as_id,allow_trailing_comma=False,nonempty=True)
+            return rel_mod,imports
+        def import_stmt3():
+            """ "from" relative_module "import" "(" identifier ["as" identifier] ("," identifier ["as" identifier])* [","] ")"
+            note trailing comma is allowed this time
+            """
+            p.keyword('from')
+            rel_mod = relative_module()
+            p.keyword('import')
+            with p.parens() as inner:
+                def id_as_id(): # returns tuple((str list),str)
+                    """ identifier ["as" identifier] """
+                    def as_id():
+                        inner.keyword('as')
+                        return inner.identifier()
+                    id1 = inner.identifier()
+                    id2 = inner.or_none(as_id)
+                    return id1,id2
+                        imports = p.list(id_as_id,nonempty=True)
+            return rel_mod,imports
+
+
+
+
+
+
+
+
+
     def __init__(self,elems):
         super().__init__()
         self.importitems = []
@@ -1910,36 +2391,27 @@ class Import(Stmt):
                 alias = identifier(imp)
             self.withitems.append(Withitem(modstr,alias))
 
-class Importitem(SynNode):
+class Importitem(AuxNode):
     def __init__(self,var,alias):
         super().__init__()
         self.var=var
         self.alias=alias
+@simple('break')
 class Break(Stmt):
     def __init__(self,elems):
         super().__init__()
 
         elems = keyword(elems,"break")
         empty(elems)
+@simple('continue')
 class Continue(Stmt):
     def __init__(self,elems):
         super().__init__()
 
         elems = keyword(elems,"continue")
         empty(elems)
-class Delete(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-        self.targets = []
 
-        elems = keyword(elems,"del")
-        while not empty(elems,fail=BOOL):
-            target,elems = target(elems,till=(',',INCLUSIVE),usage=DEL)
-            self.targets.append(target)
-        if len(self.targets) == 0
-            raise SyntaxError("`del` statement must have at least one target")
-        empty(elems)
-
+@simple('global')
 class Global(Stmt):
     def __init__(self,elems):
         super().__init__()
@@ -1953,6 +2425,7 @@ class Global(Stmt):
             raise SyntaxError("`global` statement must have at least one target")
         empty(elems)
 
+@simple('nonlocal')
 class Nonlocal(Stmt):
     def __init__(self,elems):
         super().__init__()
@@ -1967,64 +2440,9 @@ class Nonlocal(Stmt):
 
         empty(elems)
 
-class ExprStmt(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-        self.expr,elems = expr(elems)
-        empty(elems)
-
-class Asn(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-        self.targets = []
-
-        while not empty(elems,fail=BOOL):
-            tar,elems_new = target(elems,till=('=',INCLUSIVE),usage=STORE,fail=FAIL)
-            # if we consume our last target and finish the stmt then that final target was actually an expr that just happened to parse as valid, so now we rewind and use expr()
-            if empty(elems_new,fail=BOOL) or tar is FAIL:
-                self.expr,elems = expr_assert_empty(elems)
-                break
-            self.targets.append(tar)
-
-
-class AugAsn(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-        self.target,elems = target(elems)
-        self.op = elems[0]
-        elems = token(elems,BINOPS)
-        elems = token(elems,'=')
-        self.val = expr(elems)
-        empty(elems)
-
-class Assert(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-        elems = keyword(elems,"assert")
-        self.cond,elems = expr(elems)
-        if token(elems,',',fail=BOOL):
-            self.expr,elems = expr(elems)
-        empty(elems)
-
-
-
-
-# EXPRS
-class Targetable:
-    def __init__(self,elems,**kw):
-        super().__init__()
-        assert isinstance(self,Expr)
-        if 'usage' not in kw:
-            raise InheritanceError("{self} is a Targetable object and must be called with the 'usage' kwarg")
-        self.usage = kw.pop('usage')
-
-
-
-# TODO All e_lhs inputs to a constructor (left recursive) should call set_usage on e_lhs. We enforce this by having all .targetable things ensure a non-None .usage during a tree traverasal after the AST is made
-
-
-
 # TODO would be ultra nice to say identifier() vs identifer?() where the latter sends an extra argument which is just like fail=BOOL!
+
+## EXPRS
 
 class Var(Expr):
     """
@@ -2055,26 +2473,26 @@ class DoubleStarred(InitExpr):
 # key:val or key=val
 
 ## SYN NODES
-class KVPair(SynNode):
+class KVPair(AuxNode):
     def __init__(self,key,val):
         super().__init__()
         self.key = key
         self.val = val
 
-class CompIf(SynNode):
+class CompIf(AuxNode):
     def __init__(self,cond,comp_iter):
         super().__init__()
         self.cond = cond
         self.comp_iter = comp_iter
 
-class CompFor(SynNode):
+class CompFor(AuxNode):
     def __init__(self,targets,iter,comp_iter):
         super().__init__()
         self.targets = targets
         self.iter = iter
         self.comp_iter = comp_iter
 
-class List(Expr):
+class ListDisplay(Expr):
     """list_display ::=  "[" [starred_list | comprehension] "]" """
     def __init__(self,body):
         super().__init__()
@@ -2084,14 +2502,15 @@ class List(Expr):
         p = p.brackets()
 
         def comprehension():
-            lhs = p.expression()
-            body = p.build_node(Comprehension,lhs)
+            comp = p.comprehension()
             p.assert_empty()
-            return List(body)
+            return ListDisplay(comp)
+        def starred_list_noexpr():
+            return p.starred_list(as_expr=False)
 
-        return p.logical_xor(comprehension,p.starred_list)
+        return p.logical_xor(comprehension,starred_list_noexpr)
 
-class Set(Expr):
+class SetDisplay(Expr):
     """set_display ::=  "[" [starred_list | comprehension] "]" """
     def __init__(self,body):
         super().__init__()
@@ -2101,14 +2520,15 @@ class Set(Expr):
         p = p.braces()
 
         def comprehension():
-            lhs = p.expression()
-            body = p.build_node(Comprehension,lhs)
+            comp = p.comprehension()
             p.assert_empty()
-            return Set(body)
+            return SetDisplay(comp)
+        def starred_list_noexpr():
+            return p.starred_list(as_expr=False)
 
-        return p.logical_xor(comprehension,p.starred_list)
+        return p.logical_xor(comprehension,starred_list_noexpr)
 
-class Dict(Expr):
+class DictDisplay(Expr):
     """
     dict_display       ::=  "{" [key_datum_list | dict_comprehension] "}"
     key_datum_list     ::=  key_datum ("," key_datum)* [","]
@@ -2117,32 +2537,27 @@ class Dict(Expr):
     """
     def __init__(self,body):
         super().__init__()
-        self.body = body
+        self.body = body # DictComprehension | ((DoubleStarred(or_expr)|KVPair) list)
     @staticmethod
     def build(p):
-        p = p.braces()
+        with p.braces() as p:
 
-        def comprehension():
-            key = p.expression()
-            p.token(':')
-            val = p.expression()
-            kv = KVPair(key,val)
-            body = p.build_node(Comprehension,kv)
-            p.assert_empty()
-            return Dict(body)
+            def comprehension():
+                comp = p.build_node(DictComprehension)
+                return DictDisplay(comp)
 
-        def kv_pair():
-            key = p.expression()
-            p.token(':')
-            val = p.expression()
-            kv = KVPair(key,val)
-            return kv
-        def dict_expansion():
-            p.token('**')
-            e = DoubleStarred(p.or_expr())
-            return e
-        def key_datum_list(): # emtpy is allowed
-            return Dict(p.comma_list(kv_pair,dict_expansion))
+            def kv_pair():
+                key = p.expression()
+                p.token(':')
+                val = p.expression()
+                kv = KVPair(key,val)
+                return kv
+            def dict_expansion():
+                p.token('**')
+                e = DoubleStarred(p.or_expr())
+                return e
+            def key_datum_list(): # empty list is allowed
+                return DictDisplay(p.comma_list(kv_pair,dict_expansion))
 
         return p.logical_xor(comprehension,key_datum_list)
 
@@ -2151,16 +2566,34 @@ class Dict(Expr):
 """
 The iterable expression in the leftmost for clause is evaluated directly in the enclosing scope and then passed as an argument to the implictly nested scope. Subsequent for clauses and any filter condition in the leftmost for clause cannot be evaluated in the enclosing scope as they may depend on the values obtained from the leftmost iterable. For example: [x*y for x in range(10) for y in range(x, x+10)].
 """
-@left_recursive('expression')
+
+"""
+A Comprehension does not need to be left_recursive because the .expression() that starts it can't start with Comprehension anyways.
+"""
+
 class Comprehension(Expr):
-    def __init__(self,leftmost_for,for_if_list):
+    def __init__(self,expr,comp_for):
         super().__init__()
+        self.expr = expr # can be an expression or a KVPair (for dict comprehension)
         self.comp_for = comp_for
     @staticmethod
-    def build(lhs_node,p):
+    def build(p):
+        expr = self.expression()
         comp_for = p.comp_for()
-        return Comprehension(lhs_node,comp_for)
+        return Comprehension(expr,comp_for)
 
+class DictComprehension(Expr):
+    def __init__(self,kv_pair,comp_for):
+        super().__init__()
+        self.kv_pair = kv_pair # can be an expression or a KVPair (for dict comprehension)
+        self.comp_for = comp_for
+    @staticmethod
+    def build(p):
+        key = p.expression()
+        p.token(':')
+        val = p.expression()
+        kv = KVPair(key,val)
+        return DictComprehension(kv_pair,comp_for)
 
 
 
@@ -2196,9 +2629,9 @@ class Ternary(Expr):
     """
     def __init__(self,cond,if_val,else_val):
         super().__init__()
-        self.cond = cond
-        self.if_val = if_val
-        self.else_val = else_val
+        self.cond = cond # or_test
+        self.if_val = if_val # or_test
+        self.else_val = else_val # expression
     @staticmethod
     def build(p,leftnode):
         p.keyword('if')
@@ -2217,7 +2650,7 @@ class Lambda(Expr):
         self.args = args
         self.body = body
     @staticmethod
-    def build(p,nocond=False):
+    def build(p,nocond=False): # the trunk version is the default nocond=False
         p.keyword('lambda')
         args = p.parameter_list(no_annotations=True)
         if nocond:
@@ -2226,21 +2659,21 @@ class Lambda(Expr):
             body = p.expresssion()
         return Lambda(args,body)
 
-# There's YieldExpr YieldAtom (also an Expr) and YieldStmt
-class YieldExpr(Expr):
+# There's YieldExpression YieldAtom (also an Expr) and YieldStmt
+class YieldExpression(Expr):
     """
     yield_expression ::=  "yield" [expression_list | "from" expression]
     """
-    def __init__(self,val,from):
+    def __init__(self,val,has_from):
         super().__init__()
         self.val = val
-        self.from = from
+        self.has_from = has_from # bool
     @staticmethod
     def build(p):
         p.keyword('yield')
-        has_from = p.or_false.keyword('yield')
-        from = e.expression() if has_from else None
-        return Yield(val,from)
+        has_from = p.or_false.keyword('from')
+        val = e.expression() if has_from else p.expression_list()
+        return YieldExpression(val,has_from)
 
 class YieldAtom(Expr):
     """
@@ -2251,15 +2684,29 @@ class YieldAtom(Expr):
         self.expr = expr
     @staticmethod
     def build(p):
-        p = p.parens()
-        expr = p.build_node(YieldExpr)
-        p.assert_empty()
+        with p.parens() as p:
+            expr = p.build_node(YieldExpression)
         return expr
 
 
 
+class GeneratorExpression(Expr):
+    """
+    generator_expression ::=  "(" expression comp_for ")"
 
-class ParenForm(SynExpr):
+    A generator expression yields a new generator object. Its syntax is the same as for comprehensions, except that it is enclosed in parentheses instead of brackets or curly braces.
+
+    """
+    def __init__(self,comp):
+        self.comp = comp
+    @staticmethod
+    def build(p):
+        p = p.parens()
+        comp = p.comprehension()
+        p.assert_empty()
+        return GeneratorExpression(comp)
+
+class ParenthForm(NodeGenerator):
     """
     parenth_form ::=  "(" [starred_expression] ")"
 
@@ -2269,12 +2716,10 @@ class ParenForm(SynExpr):
     """
     @staticmethod
     def build(p):
-        p = p.parens()
-        body = p.starred_expression()
-        p.assert_empty()
-
-        if len(body) == 1 and p.elems[-1].typ != COMMA:
-            return body[0] # eval to the single expression in the list
+        with p.parens() as p:
+            body = p.starred_expression()
+            if len(body) == 1 and p.elems[-1].typ != COMMA:
+                return body[0] # eval to the single expression in the list
 
         return Tuple(body) # includes len==0 empty tuple case
 
@@ -2407,90 +2852,100 @@ class Invert(UnopL):pass
 
 class Not(UnopL):pass
 
-
-
-@left_recursive
-class UnopR(Expr):
-    def __init__(self,val):
-        super().__init__()
-        self.val = val # no need to include `op` bc thats captured by subclass
-    @staticmethod
-    def identify(elems):
-        if token(elems,'.',fail=BOOL):
-            return Attr
-        if isinstance(elems[0],AParen):
-            return Call
-        if isinstance(elems[0],ABracket):
-            _,body = expr(elems[0].body, till=[',',':'])
-            if empty(body,fail=BOOL):
-                return Subscript # if it's a single expr then it's a subscript
-            return Slice
-        return None
-    @staticmethod
-    def build(p,leftnode):
-        if token(elems,'.',fail=BOOL):
-            # Attr
-            elems = token(elems,'.')
-            attr,elems = identifer(elems)
-            return Attr(lhs_node,attr),elems
-        if isinstance(elems[0],AParen):
-            # Call
-            """
-            Calls can apparently take a comprehension! I will ignore this for now, tho it's probably not hard to do once you've done comprehensions.
-            """
-            args = Args(elems[0])
-            return Call(lhs_node,args),elems[1:]
-        if isinstance(elems[0],ABracket):
-            body = elems[0].body
-            # Subscript or Slice
-            """
-            Subscript = "[" Expr "]"
-            Slice: has at least one comma or colon (colon can't be part of an expr tho like a lambda is fine for example)
-            Slice = comma sep list of Expr | Expr:Expr | Expr:Expr:Expr
-            If the slice list contains at least one comma, the key is a tuple containing the conversion of the slice items; otherwise, the conversion of the lone slice item is the key. The conversion of a slice item that is an expression is that expression. The conversion of a proper slice is a slice object (see section The standard type hierarchy) whose start, stop and step attributes are the values of the expressions given as lower bound, upper bound and stride, respectively, substituting None for missing expressions.
-            sounds like we should make a slice() object since that's a real thing in python
-            """
-            slicers = []
-            curr_slicer = []
-            while not empty(body,fail=BOOL):
-                e,body = expr(body,till=[',',':'])
-                if token(body,':',fail=BOOL):
-                    curr_slice.append(e)
-                elif token(body,',',fail=BOOL):
-                    slicers.append(Slicer(curr_slicer))
-                    curr_slicer = []
-                else:
-                    raise SyntaxError("trailing characters in slicing or subscript")
-            if len(slicers) == 1 and slicers[0].stop is None and slicers[0].step is None:
-                # Subscript
-                return Subscript(lhs_node,slicers[0].start),elems[1:]
-            # Slice
-            return Slice(lhs_node,slicers),elems[1:]
-class Attr(UnopR):
+@left_recursive('primary')
+class AttributeRef(Expr):
     def __init__(self,val,attr):
-        # no super() init. Putting everything in here is clearer.
+        super().__init__()
         self.val = val
         self.attr = attr
-class Subscript(UnopR):
-    def __init__(self,val,index):
-        # no super() init
+    @staticmethod
+    def build(p,leftnode):
+        p.token('.')
+        attr = p.identifer()
+        return AttributeRef(leftnode,attr)
+
+@left_recursive('primary')
+class Subscription(InitExpr):
+    def __init__(self,val,expr):
+        super().__init__()
         self.val = val
-        self.index = index
-class Slice(UnopR):
-    def __init__(self,val,slicers)
-        # no super() init
+        self.expr = expr
+
+@left_recursive('primary')
+class Slicing(InitExpr):
+    def __init__(self,val,items):
+        super().__init__()
         self.val = val
-        self.slicers = slicers
-class Slicer(Expr): # the python slice() object. Note that the name Slice is taken already
-    def __init__(self,start_stop_step):
-        self.start = start_stop_step[0]
-        self.stop = start_stop_step[1] if len(start_stop_step) > 1 else None
-        self.step = start_stop_step[2] if len(start_stop_step) > 2 else None
-class Call(UnopR):
+        self.items = items
+
+@left_recursive('primary')
+class SubscriptOrSlicing(NodeGenerator):
+    """
+    Grouping these makes sense because of the "there is ambiguity in the formal syntax" note below.
+
+    subscript = "[" expression_list "]"
+    slicing      ::=  primary "[" slice_list "]"
+
+    slice_list   ::=  slice_item ("," slice_item)* [","]
+    slice_item   ::=  expression | proper_slice
+    proper_slice ::=  [lower_bound] ":" [upper_bound] [ ":" [stride] ]
+    lower_bound  ::=  expression
+    upper_bound  ::=  expression
+    stride       ::=  expression
+
+    There is ambiguity in the formal syntax here: anything that looks like an expression list also looks like a slice list, so any subscription can be interpreted as a slicing. Rather than further complicating the syntax, this is disambiguated by defining that in this case the interpretation as a subscription takes priority over the interpretation as a slicing (this is the case if the slice list contains no proper slice).
+    """
+    @staticmethod
+    def build(p,leftnode):
+        with p.brackets() as p:
+            def proper_slice():
+                # this fn must be defined after start of `with` block for proper `p` closure
+                lower = p.or_none.expression()
+                p.token(":")
+                upper = p.or_none.expression()
+                if p.or_false.token(":"):
+                    stride = p.or_none.expression()
+                else:
+                    stride = None
+                return Slice(lower,upper,stride)
+            def slice_item():
+                return p.logical_xor(proper_slice,p.expression)
+            items = p.comma_list(slice_item,nonempty=True)
+
+            if all([type(item) != Slice for item in exprs]):
+                # a[1,2] == a[(1,2)]
+                items = items[0] if (len(items) == 1 and p.prev.data != ',') else Tuple(items)
+                return Subscript(leftnode,items)
+        return Slicing(leftnode,items)
+
+# A syntax node version of the python slice() object. Same kinda info but not an acual Expr. Used by Slicing and such.
+class Slice(AuxNode):
+    def __init__(self,start=None,stop=None,step=None):
+        super().__init__()
+        self.start = start
+        self.stop = stop
+        self.step = step
+
+@left_recursive('primary')
+class Call(Expr):
     def __init__(self,func,args):
-        # no super() init
-        self.func = funct
-        self.args = args
+        super().__init__()
+        self.func = func
+        self.args = args # Arguments | Comprehension
+    @staticmethod
+    def build(p,leftnode):
+        with p.parens() as p:
+            args = p.exclusive_xor(p.argument_list,p.comprehension)
+        return AttributeRef(leftnode,args)
+
+class AwaitExpr(Expr):
+    def __init__(self,expr):
+        super().__init__()
+        self.expr = expr # 'primary'
+    @staticmethod
+    def build(p,leftnode):
+        expr = p.primary()
+        return AwaitExpr(expr)
 
 unopl_subclass = {
     ADD: UAdd,
@@ -2516,13 +2971,10 @@ binop_subclass = {
 boolop_subclass = {
     AND: And,
     OR: Or
-}
-
-
 
 
 @left_recursive(None) # forces all children to do left_recursive(actual_type)
-class Binop(Expr):
+class Binop(AbstractExpr):
     def __init__(self,lhs,rhs):
         super().__init__()
         self.lhs = lhs # no need to include `op` bc thats captured by subclass
@@ -2533,104 +2985,98 @@ class Binop(Expr):
             return binop_subclass[p.tok.typ]
         raise SyntaxError
     @classmethod
-    def gen_subclass(cls,rhstype):
-        @staticmethod
+    def gen_build(cls,rhstype):
         def build(p,leftnode):
             rightnode = p.trunk_expr(rhstype)
             return cls(leftnode,rightnode)
-        cls.build = build
+        return build
 
-# a_expr
-@left_recursive('a_expr')
-class Add(Binop):pass
-Add.gen_build('m_expr')
-@left_recursive('a_expr')
-class Sub(Binop):pass
-Sub.gen_build('m_expr')
+# class decorator to easily define the types on the left and right side of the binop
+def binop(left_type,right_type):
+    """
+    @binop('a_expr','m_expr')
+    class Add(Binop): pass
+    ...is equivalent to...
+    @left_recursive('a_expr')
+    @gen_build('m_expr')
+    class Add(Binop):pass
+    """
+    def class_decorator(cls):
+        cls = left_recursive(left_type)(cls)
+        cls = gen_build(right_type)(cls)
+        return cls
+
+# power
+@binop('await_or_primary','u_expr')
+class Exp(Binop): pass
 
 # m_expr
-@left_recursive('m_expr')
+@binop('m_expr','u_expr')
 class Mul(Binop): pass
-Mul.gen_build('u_expr')
-@left_recursive('m_expr')
+@binop('m_expr','m_expr')
 class MatMul(Binop): pass
-MatMul.gen_build('m_expr')
-@left_recursive('m_expr')
+@binop('m_expr','u_expr')
 class FloorDiv(Binop): pass
-FloorDiv.gen_build('u_expr')
-@left_recursive('m_expr')
+@binop('m_expr','u_expr')
 class Div(Binop): pass
-Div.gen_build('u_expr')
-@left_recursive('m_expr')
+@binop('m_expr','u_expr')
 class Mod(Binop): pass
-Mod.gen_build('u_expr')
+
+# a_expr
+@binop('a_expr','m_expr')
+class Add(Binop):pass
+@binop('a_expr','m_expr')
+class Sub(Binop):pass
 
 # shift_expr
-@left_recursive('shift_expr')
+@binop('shift_expr','a_expr')
 class ShiftL(Binop): pass
-ShiftL.gen_build('a_expr')
-@left_recursive('shift_expr')
+@binop('shift_expr','a_expr')
 class ShiftR(Binop): pass
-Mod.gen_build('a_expr')
 
 # and_expr
-@left_recursive('and_expr')
+@binop('and_expr','shift_expr')
 class BitAnd(Binop): pass
-BitAnd.gen_build('shift_expr')
 
 # xor_expr
-@left_recursive('xor_expr')
+@binop('xor_expr','and_expr')
 class BitXor(Binop): pass
-BitXor.gen_build('and_expr')
 
 # or_expr
-@left_recursive('or_expr')
+@binop('or_expr','xor_expr')
 class BitOr(Binop): pass
-BitOr.gen_build('xor_expr')
-
-# TODO make sure left=power is correct
-# power
-@left_recursive('await_or_primary')
-class Exp(Binop): pass
-BitOr.gen_build('u_expr')
 
 # and_test
-@left_recursive('and_test')
+@binop('and_test','not_test')
 class And(Binop):pass
-And.gen_build('not_test')
 
 # or_test
-@left_recursive('or_test')
+@binop('or_test','and_test')
 class Or(Binop):pass
-Or.gen_build('and_test')
 
-@left_recursive
-@gathers(Compare)
+@left_recursive('or_expr')
 class Compare(Expr):
     def __init__(self,ops,vals):
         super().__init__()
         self.ops = ops
         self.vals = vals
     @staticmethod
-    def identify(elems):
-        if p.or_false.token(CMPOPS):
-            return Compare
-        return None
-    @staticmethod
     def build(p,leftnode):
         vals = [leftnode]
         ops = []
-        while True:
+        def extend():
             op = p.tok.typ
             p.token(CMPOPS)
-            e = p.trunk_expr('or_expr',left='comparison')
-            vals.append(e)
+            val = p.or_expr()
             ops.append(op)
+            vals.append(val)
+            return None
+        p.list(extend,nonempty=False)
         return Compare(ops,vals)
 
 
 # all these might be unnecessary
-#class CompareElem(SynNode): pass
+#class CompareElem(AuxNode): pass
 #class Lt(CompareElem):pass
 #class Leq(CompareElem):pass
 #class Gt(CompareElem):pass
@@ -2676,7 +3122,7 @@ def str_of_token(t):
 CMPOPS = [LEQ,LT,GEQ,GT,EQ,NEQ,IS,ISNOT,IN,NOTIN]
 BINOPS = [ADD, SUB, MUL, DIV, FLOORDIV, MOD, EXP, SHIFTRIGHT, SHIFTLEFT, BITAND, BITOR, BITXOR, AT, AND, OR]
 UNOPSL  = [ADD, SUB, NOT, INVERT] # yes, ADD and SUB can be unops
-UNOPSR  = [] # right side unary operators. There aren't any... yet! Well actually () and [] and . are UNOPSR really.
+#UNOPSR  = [] # right side unary operators. There aren't any... yet! Well actually () and [] and . are UNOPSR really.
 
 
 COMMON_ALLOWED_CHILDREN = set([QUOTE1,QUOTE2,LBRACKET,LBRACE,LPAREN,SH_LBRACE,SH, SH_LPAREN, HASH])
@@ -2685,11 +3131,18 @@ COMMON_ERROR_ON = set([RPAREN,RBRACE,RBRACKET]) # note that closers are checked 
 
 # compile the regex and also eat any whitespace that follows it
 def regex_compile(regex):
-    return re.compile(regex+'\s*')
+    return re.compile(fr'({regex})\s*'regex+'\s*')
+
+stringprefix = r'"fr"|"Fr"|"fR"|"FR"|"rf"|"rF"|"Rf"|"RF"|"r"|"u"|"R"|"U"|"f"|"F"'
+shortstringstart = rf'\''
+#shortstringitem = rf'{shortstringchar} | {stringescapeseq}'
+# not sure if \n and \r are both supposed to be there
+#shortstringchar = r'[^\\\n\r\']'
+#((\'(([^\\\n\r\'])|(\\.))*|)|(|))'),
 
 # order is important in this list!
 regex_of_token = {
-    INTEGER   : regex_compile(r'(\d+)'),
+    INTEGER   : regex_compile(r'\d+'),
     ELLIPSIS  : regex_compile(r'...'), # BEFORE PERIOD
     PERIOD    : regex_compile(r'\.'),
     COMMA     : regex_compile(r','),
@@ -2699,15 +3152,16 @@ regex_of_token = {
 
     # GROUPINGS
     PYPAREN   : regex_compile(r'py\('), # BEFORE ID
-    SH_LBRACE : regex_compile(r'sh{'), # BEFORE ID
-    SH_LPAREN : regex_compile(r'\(\s*sh\s+'), # BEFORE ID
-    SH        : regex_compile(r'sh\s+'), # BEFORE ID, AFTER SH_*
+    #SH_LBRACE : regex_compile(r'sh{'), # BEFORE ID
+    SH_LPAREN : regex_compile(r'sh\('), # BEFORE ID
+    SH        : regex_compile(r'sh\b'), # BEFORE ID, AFTER SH_*
     LPAREN    : regex_compile(r'\('),
     RPAREN    : regex_compile(r'\)'),
     LBRACE    : regex_compile(r'{'),
     RBRACE    : regex_compile(r'}'),
     LBRACKET  : regex_compile(r'\['),
     RBRACKET  : regex_compile(r'\]'),
+    ARROW     : regex_compile(r'->'), # BEFORE SUB
 
     # BINOPS
     ADD       : regex_compile(r'\+'),
@@ -2723,6 +3177,7 @@ regex_of_token = {
     BITOR     : regex_compile(r'\|'),
     BITXOR    : regex_compile(r'\^'),
     AT        : regex_compile(r'@'),
+
 
     # UNOPS
     INVERT    : regex_compile(r'~'),
@@ -2748,12 +3203,12 @@ regex_of_token = {
     ASN       : regex_compile(r'='),
     ESCQUOTE2 : regex_compile(r'\\\"'),
     ESCQUOTE1 : regex_compile(r'\\\''),
-    QUOTE2    : regex_compile(r'\"'),
-    QUOTE1    : regex_compile(r'\''),
+    HEREDOC    : regex_compile(r'(?:""")|(?:\'\'\')'),
+    QUOTE    : regex_compile(r'"|\''),
     HASH      : regex_compile(r'#'),
     PIPE      : regex_compile(r'\|'),
-    ID        : regex_compile(r'([a-zA-z_]\w*)'), # must go after keywords like sh
-    UNKNOWN   : regex_compile(r'(.)'),
+    ID        : regex_compile(r'[a-zA-z_]\w*'), # must go after keywords like sh
+    UNKNOWN   : regex_compile(r'.'),
     SOL : None, # should never be matched against since 'UNKOWN' is a catch-all
     EOL : None, # should never be matched against since 'UNKOWN' is a catch-all
     NEWLINE : None, # newlines are manually inserted hence no need for a regex
