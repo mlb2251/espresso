@@ -191,7 +191,7 @@ make sure .assert_empty() is properly called everywhere
 
 Special Nodes:
 InitExpr(Expr) - an Expr with no build/identify functions so it must be created directly through __init__ (which takes whatever its components are, NOT a Parser.
-NodeGenerator(Node) - a Node which never shows up in the AST, when you call build() it just returns some other Expr/Stmt node, possibly from a range of options.
+ExprGenerator(Node) - a Node which never shows up in the AST, when you call build() it just returns some other Expr/Stmt node, possibly from a range of options.
 AuxNode(Node) - Things like Parameters and Args that do not evaluate to a value and thus are not Exprs.
 AbstractExpr(Expr) - Things like Binop that never exist in the AST but are useful parent classes to have for isinstance() calls and inheritance.
 
@@ -357,9 +357,20 @@ class Parser():
         self.or_fail = Postprocessor(self,FAIL)
         self.or_false = Postprocessor(self,False)
         self.or_ = (lambda retval: Postprocessor(self,retval))
+        self.no_ws = False # indicates if whitespace after tokens is currently allowed
+        self.no_ws_initial = False # used by no_whitespace()
     def next(self):
         if self.idx >= len(self.elems):
             raise SyntaxError("Calling next() when already passed the last elem")
+
+        # starting on the second call to next() while in the no_whitespace() contextmanager, make sure that theres no whitespace trailing on the token 2 before whichever one next() will result in .tok pointing to.
+        if self.no_ws and not self.no_ws_initial:
+            if len(self.prev.verbatim) != len(self.prev.data): # True if has trailing whitespace
+                raise SyntaxError
+
+
+        if self.no_ws and self.no_ws_initial:
+            self.no_ws_initial = False
         self.idx += 1
         return
     ## FUNDAMENTALS
@@ -367,7 +378,14 @@ class Parser():
     def tok(self):
         if self.idx >= len(self.elems):
             raise SyntaxError("Ran out of elems to consume")
-        return self.elems[self.idx]
+        token = self.elems[self.idx]
+
+        # if self.no_ws, raise SynErr on trailing whitespace
+        if self.no_ws and isinstance(token,Tok):
+            if len(token.data) != len(token.verbatim):
+                raise SyntaxError
+
+        return token
     @property
     def prev(self):
         if self.idx-1 >= len(self.elems):
@@ -474,6 +492,52 @@ class Parser():
             yield None
         except SyntaxError:
             self.idx = idx
+    @contextmanager
+    def no_whitespace(self):
+        """
+        Precise behavior: contextmanager that will make .next() throw a SynErr if next() is trying to consume a token that is preceded by a token that doesn't have whitespace, except no SynErr is thrown on the first next() call in the contextmanager.
+        Intuitively: There can't be any whitespace between the tokens consumed during this contextmanager. A SynErr will get thrown by next() at the first instant that this doesn't hold.
+        """
+        self.no_ws = True
+        self.no_ws_initial = True
+        try:
+            yield None
+        finally:
+            self.no_ws = False
+
+    """these are all contextmanagers that parse the contents of compound atoms, and also confirm that those parsers ran to completion"""
+    def brackets(self):
+        return self._compound_atom_parser(ABracket)
+    def braces(self):
+        return self._compound_atom_parser(ABrace)
+    def parens(self):
+        return self._compound_atom_parser(AParen)
+    def quotes(self):
+        return self._compound_atom_parser(AQuote)
+    def brackets(self):
+        return self._compound_atom_parser(ABracket)
+    def colonlist_head(self):
+        return self._compound_atom_parser(AColonList,'head')
+    def colonlist_body(self):
+        return self._compound_atom_parser(AColonList,'body')
+    @contextmanager
+    def _compound_atom_parser(self,atom_cls,attr='body'):
+        if not isinstance(p.tok,atom_cls):
+            raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
+        elems,idx = self.elems, self.idx
+        self.elems = getattr(p.tok,attr)
+        self.idx = 0
+        try:
+            yield None
+            # the following only runs if no SynErr is raised in the whole `with` block
+            if not self.empty():
+                raise SyntaxError(f"Unparsed remaining contents of a {atom_cls} is an error")
+        finally:
+            self.elems = elems
+            self.idx = idx
+        self.tok.parsed.append(attr)
+        if ('head' in self.tok.parsed or not hasattr(self.tok,'head')) and ('body' in self.tok.parsed):
+            self.next() # step forward past this compound atom if 'head' (if exists) and 'body' have both been parsed
     ## BNF TYPES
     def parameter_list(self,no_annotations=False):
         return self.build_node(Parameters,no_annotations=no_annotations)
@@ -554,52 +618,6 @@ class Parser():
             raise SyntaxError
         return e
 
-    # these are all contextmanagers that yield parsers that parse the contents, and also confirm that those parsers ran to completion
-    def brackets(self):
-        return self._atom_body(ABracket)
-    def braces(self):
-        return self._atom_body(ABrace)
-    def parens(self):
-        return self._atom_body(AParen)
-    def quotes(self):
-        return self._atom_body(AQuote)
-    def brackets(self):
-        return self._atom_body(ABracket)
-    def colonlist(self):
-        return self._atom_head_body(AColonList)
-    def mark_poison(self):
-        def poison_message(*args,**kwargs):
-            raise Exception("A parser is being used after being marked as poisoned. This might happen if the parser yielded by `with p.brackets() as p:` was then used after the end of the `with` block (the variable returned in the `as` syntax actually leaks out into the enclosing scope in Python)")
-        # make it so pretty much any use of this parser raises an error
-        self.__getattr__ = poison_message
-    @contextmanager
-    def _atom_body(self,atom_cls):
-        if not isinstance(p.tok,atom_cls):
-            raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
-        p = Parser(p.tok.body)
-        try:
-            yield p # contextmanager yields parser
-        finally:
-            p.mark_poison()
-        # the following only runs if no SynErr is raised in the whole `with` block
-        if not p.empty():
-            raise SyntaxError(f"Unparsed remaining contents of a {atom_cls} is an error")
-        self.next() # step forward past this compound atom
-    def _atom_head_body(self,atom_cls):
-        if not isinstance(p.tok,atom_cls):
-            raise SyntaxError(f"Attempting to parse {atom_cls} but found {p.tok}")
-        head_parser,body_parser = Parser(p.tok.head),Parser(p.tok.body)
-        try:
-            yield (head_parser,body_parser) # contextmanager
-        finally:
-            head_parser.mark_poison()
-            body_parser.mark_poison()
-        if not head_parser.empty():
-            raise SyntaxError("CompoundAtom's head parser has unparsed contents remaining")
-        if not body_parser.empty():
-            raise SyntaxError("CompoundAtom's body parser has unparsed contents remaining")
-        self.next()
-        return ret
     def argument_list(self):
         return self.build_node(Arguments)
     def target_list(p):
@@ -632,13 +650,13 @@ class Parser():
             return build_node(*args,**kwargs)
         return fn
     def build_node(self,nodeclass,leftnode=None,**kwargs):
-        assert not issubclass(nodeclass,InitExpr), f"Can't use build_node with {nodeclass} because it's an InitExpr. Most likely you want to find a NodeGenerator that builds this InitExpr and call that."
+        assert not issubclass(nodeclass,(InitExpr,InitStmt)), f"Can't use build_node with {nodeclass} because it's an InitExpr or InitStmt. Most likely you want to find a ExprGenerator or StmtGenerator that builds this InitExpr/InitStmt and call that."
         assert hasattr(nodeclass,'build') or hasattr(nodeclass,'identify'), f"{nodeclass} must have either build() or identify() methods"
 
         def output_check(node):
             assert node is not None, f"{nodeclass}.build() returned None, you probably forgot to return the built node"
-            if not isinstance(node,NodeGenerator):
-                assert type(node) == nodeclass, f"{nodeclass}.build() did not return an expression of type {nodeclass}. This is only allowed in NodeGenerators and is otherwise likely unintentional"
+            if not isinstance(node,(ExprGenerator,StmtGenerator)):
+                assert type(node) == nodeclass, f"{nodeclass}.build() did not return an expression of type {nodeclass}. This is only allowed in ExprGenerators and StmtGenerators and is otherwise likely unintentional"
 
         # identify() case
         if hasattr(nodeclass,identify):
@@ -1040,11 +1058,13 @@ class AStmt(Atom):
 class ACompoundStmt(Atom):
     """
     .head: (Atom|Tok) list | None  -- None if AMasterList
+    .body
     """
     def __init__(self,tok):
         super().__init__(tok)
         self.curr_stmt = []
         self.closer = None # only gets closed by the linestart_trypop function
+        self.parsed = []
     def finish_stmt(self):
         assert not self.finished
         if len(self.curr_stmt) > 0: # we ignore blank lines and pure comment lines
@@ -1264,6 +1284,7 @@ def simple(*kws):
     """
     def class_decorator(cls):
         assert isinstance(cls,Stmt)
+        assert not isinstance(cls,InitStmt)
         cls.leading_kws = kws
         cls.type = 'simple'
         [simple_stmt_nodes[kw].append(cls) for kw in kws]
@@ -1277,6 +1298,7 @@ def compound(*kws):
     """
     def class_decorator(cls):
         assert isinstance(cls,Stmt)
+        assert not isinstance(cls,InitStmt)
         cls.leading_kws = kws
         cls.type = 'compound'
         [compound_stmt_nodes[kw].append(cls) for kw in kws]
@@ -1301,11 +1323,13 @@ class Expr(Node):
 
 # An Expr with no build/identify functions so it must be created directly through __init__ (which takes whatever its components are, NOT a Parser.
 class InitExpr(Expr): pass
+class InitStmt(Stmt): pass
 # A Node which never shows up in the AST, when you call build() it just returns some other Expr/Stmt node, possibly from a range of options.
-class NodeGenerator(Expr): pass
+class ExprGenerator(Expr): pass
+class StmtGenerator(Stmt): pass
 # Things like Parameters and Args that do not evaluate to a value and thus are not Exprs.
 class AuxNode(Node): pass
-# Things like Binop that never exist in the AST but are useful parent classes to have for isinstance() calls and inheritance. Unlike NodeGenerator the things it produces are actual children of it.
+# Things like Binop that never exist in the AST but are useful parent classes to have for isinstance() calls and inheritance. Unlike ExprGenerator the things it produces are actual children of it.
 class AbstractExpr(Expr): pass
 
 
@@ -2135,7 +2159,7 @@ class AugAsn(Stmt):
         return Assignment(target,op,val)
 
 @simple(None)
-class AnnotatedAssignment(NodeGenerator):
+class AnnotatedAssignment(ExprGenerator):
     @staticmethod
     def build(p):
         """
@@ -2267,11 +2291,21 @@ class Continue(Stmt):
         p.keyword('continue')
         return Continue()
 
+Alias = namedtuple('Alias','val alias')
+
+class ModImport(InitStmt):
+    def __init__(self,mods):
+        self.mods = mods # Alias(str,str) list
+class FromImport(InitStmt):
+    def __init__(self,mod):
+        self.mod = mod # str | (str list) ; it's a list if relative module
+        self.imports = imports # Alias(str,str) list | '*'
+
 @simple('import','from')
-class Import(Stmt):
+class Import(StmtGenerator):
     def __init__(self,):
         super().__init__()
-        self.
+        self.from_mod = 
         self.
     @staticmethod
     def build(p):
@@ -2288,17 +2322,18 @@ class Import(Stmt):
         """
         def module(): # returns (str list)
             """ module ::=  (identifier ".")* identifier """
-            def fn():
+            def id_dot():
                 name = p.identifier()
                 p.token('.')
                 return name
             with p.no_whitespace():
-                return p.list(fn) + [p.identifier()]
+                return p.list(id_dot) + [p.identifier()]
         def relative_module(): # returns tuple(ndots,(str|None))
             """ relative_module ::=  "."* module | "."+ """
             def dot():
                 p.token('.')
-            ndots = len(p.list(dot))
+            with p.no_whitespace():
+                ndots = len(p.list(dot))
             mod = p.or_none(module)
             if mod is None and ndots == 0:
                 raise SyntaxError
@@ -2310,17 +2345,17 @@ class Import(Stmt):
             """ module ["as" identifier] """
             mod = module()
             as_ident = p.or_none(as_id)
-            return mod,as_ident
+            return Alias(mod,as_ident)
         def id_as_id(): # returns tuple((str list),str)
             """ identifier ["as" identifier] """
             id1 = p.identifier()
             id2 = p.or_none(as_id)
-            return id1,id2
+            return Alias(id1,id2)
 
         def import_stmt1(): # returns (import_as list)
             """ "import" module ["as" identifier] ("," module ["as" identifier])* """
             p.keyword('import')
-            return p.list(mod_as_id,allow_trailing_comma=False,nonempty=True)
+            return ModImport(p.comma_list(mod_as_id,allow_trailing_comma=False,nonempty=True))
         def import_stmt2(): # returns tuple(relative_module, import_as list)
             """ "from" relative_module "import" identifier ["as" identifier] ("," identifier ["as" identifier])*
             note theres no module() call this time it's identifier() instead
@@ -2328,8 +2363,8 @@ class Import(Stmt):
             p.keyword('from')
             rel_mod = relative_module()
             p.keyword('import')
-            imports = p.list(id_as_id,allow_trailing_comma=False,nonempty=True)
-            return rel_mod,imports
+            imports = p.comma_list(id_as_id,allow_trailing_comma=False,nonempty=True)
+            return FromImport(rel_mod,imports)
         def import_stmt3():
             """ "from" relative_module "import" "(" identifier ["as" identifier] ("," identifier ["as" identifier])* [","] ")"
             note trailing comma is allowed this time
@@ -2337,108 +2372,76 @@ class Import(Stmt):
             p.keyword('from')
             rel_mod = relative_module()
             p.keyword('import')
-            with p.parens() as inner:
-                def id_as_id(): # returns tuple((str list),str)
-                    """ identifier ["as" identifier] """
-                    def as_id():
-                        inner.keyword('as')
-                        return inner.identifier()
-                    id1 = inner.identifier()
-                    id2 = inner.or_none(as_id)
-                    return id1,id2
-                        imports = p.list(id_as_id,nonempty=True)
-            return rel_mod,imports
+            with p.parens():
+                imports = p.comma_list(id_as_id,nonempty=True)
+            return FromImport(rel_mod,imports)
+        def import_stmt4():
+            """ "from" module "import" "*" """
+            p.keyword('from')
+            mod = module()
+            p.keyword('import')
+            p.token('*')
+            FromImport(mod,'*')
+        return p.exclusive_xor(import_stmt1,import_stmt2,import_stmt3,import_stmt4)
 
-
-
-
-
-
-
-
-
-    def __init__(self,elems):
+@simple('from')
+class Future(Stmt):
+    def __init__(self,expr):
         super().__init__()
-        self.importitems = []
-        self.from = None
+        self.imports = imports # Alias list
+    @staticmethod
+    def build(p):
         """
-        | import ident[.ident.ident] [as ident][, ident.ident.ident as ident, ident.ident.ident as ident]
-        | from [..]ident[.ident.ident] import x [as ident][, y as ident, ident as ident]
-        | from [..]ident[.ident.ident] import *
-        * only `from` statments can use numdots != 0 like .mod or ..mod
+        future_stmt ::=  "from" "__future__" "import" feature ["as" identifier]
+                 ("," feature ["as" identifier])*
+                 | "from" "__future__" "import" "(" feature ["as" identifier]
+                 ("," feature ["as" identifier])* [","] ")"
+        feature     ::=  identifier
         """
-
-        # `from`
-        if keyword(elems,"from",fail=BOOL):
-            elems = keyword(elems,"from")
-            self.from,elems = raw_string(imp,till='import')
-
-        elems = keyword(elems,"import")
-
-        # `from x import *`
-        if token(elems,'*',fail=BOOL):
-            if self.from is None:
-                raise SyntaxError("`import *` not valid, must do `from [module] import *`")
-            self.importitems = ['*']
-            return
-
-        imports = unsafe_split(elems,',') # the one case where it's basically fine to be unsafe because there is no expr parsing
-        for imp in imports:
-            alias = None
-            modstr,imp = raw_string(imp,till='as')
-            if not empty(imp,fail=BOOL):
-                imp = keyword(imp,'as')
-                alias = identifier(imp)
-            self.withitems.append(Withitem(modstr,alias))
-
-class Importitem(AuxNode):
-    def __init__(self,var,alias):
-        super().__init__()
-        self.var=var
-        self.alias=alias
-@simple('break')
-class Break(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-
-        elems = keyword(elems,"break")
-        empty(elems)
-@simple('continue')
-class Continue(Stmt):
-    def __init__(self,elems):
-        super().__init__()
-
-        elems = keyword(elems,"continue")
-        empty(elems)
+        p.keyword('from')
+        if not p.identifier() == '__future__':
+            raise SyntaxError
+        p.keyword('import')
+        def id_as_id():
+            id1 = p.identifier()
+            def as_id():
+                p.keyword('as')
+                return p.identifier()
+            id2 = p.or_none(as_id)
+            return Alias(id1,id2)
+        def opt1():
+            return p.comma_list(id_as_id,nonempty=True,allow_trailing_comma=False)
+        def opt2():
+            with p.parens():
+                return p.comma_list(id_as_id,nonempty=True)
+        return Future(p.logical_xor(opt1,opt2))
 
 @simple('global')
 class Global(Stmt):
-    def __init__(self,elems):
+    def __init__(self,expr):
         super().__init__()
-        self.names = []
-
-        elems = keyword(elems,"global")
-        while not empty(elems,fail=BOOL):
-            name,item = identifier(item)
-            self.names.append(name)
-        if len(self.names) == 0
-            raise SyntaxError("`global` statement must have at least one target")
-        empty(elems)
+        self.names = names
+    @staticmethod
+    def build(p):
+        """
+        global_stmt ::=  "global" identifier ("," identifier)*
+        """
+        p.keyword('global')
+        return Global(p.comma_list(p.identifier,nonempty=True,allow_trailing_comma=False)
 
 @simple('nonlocal')
 class Nonlocal(Stmt):
-    def __init__(self,elems):
+    def __init__(self,expr):
         super().__init__()
-        self.names = []
+        self.names = names
+    @staticmethod
+    def build(p):
+        """
+        nonlocal_stmt ::=  "nonlocal" identifier ("," identifier)*
+        """
+        p.keyword('nonlocal')
+        return Nonlocal(p.comma_list(p.identifier,nonempty=True,allow_trailing_comma=False)
 
-        elems = keyword(elems,"nonlocal")
-        while not empty(elems,fail=BOOL):
-            name,item = identifier(item)
-            self.names.append(name)
-        if len(self.names) == 0
-            raise SyntaxError("`global` statement must have at least one target")
-
-        empty(elems)
 
 # TODO would be ultra nice to say identifier() vs identifer?() where the latter sends an extra argument which is just like fail=BOOL!
 
@@ -2706,7 +2709,7 @@ class GeneratorExpression(Expr):
         p.assert_empty()
         return GeneratorExpression(comp)
 
-class ParenthForm(NodeGenerator):
+class ParenthForm(ExprGenerator):
     """
     parenth_form ::=  "(" [starred_expression] ")"
 
@@ -2879,7 +2882,7 @@ class Slicing(InitExpr):
         self.items = items
 
 @left_recursive('primary')
-class SubscriptOrSlicing(NodeGenerator):
+class SubscriptOrSlicing(ExprGenerator):
     """
     Grouping these makes sense because of the "there is ambiguity in the formal syntax" note below.
 
