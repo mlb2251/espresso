@@ -16,7 +16,6 @@ TODO
 -p.stmts()
 -fyi argless lambdas are already a thing so use them!
 -assert that end of line is reached after each stmt is parsed
--change .tok to .curr since it can be an Atom as well?
 -Note that all expression desugaring can desugar to a function call (potentially with argless lambdas for some arguments for lazy eval).
 -All stmt desugaring can desguar to a list of statements
 -Runtime errors for generated code: Definitely need to try/except the errors in any generated code and reemit errors that have proper information. Shouldn't be too hard to get the right line number info. I guess any expression desurgaring can always emit a function call which can be decorated to do the try/except. Then statement desurgaring can just have the whole block wrapped in try/except. Def gotta think a bit about what to put in except, but I feel like it's doable. Just gotta be very robust with writing helpful error messages for each class tho
@@ -32,9 +31,6 @@ note: i guess we cut the _stmt postfix off most of our classes (Assignment inste
 - write documentation for everything at top of this file, as youve already started!
 -`Not` shd not be in UnopL bc of precedence
 -comp_for needs internal recursion as in LRM bc its used in generators too so unless you wanna track dependencies you gotta go verbatim
--add the blank-to-None conversion for special cases like return stmts -- thats prob in the Return syntax already
--make it so tok_like will match 'not   in' when asked about 'not in' etc. Generalize it for any whitespace in any string reducing to just one. Only try on initial failure to save a bit.
--add autoinserted return None stmt at the end of fns
 -make a ident.ident.ident shorthand (with no_whitespace) like dotted_name (use in Decorator, Import, etc)
 -make it so @compound can take '@' for example (used for decorators)
 -note my argument_list() actually includes the parens and opt trailing comma already
@@ -127,13 +123,12 @@ Combinators:
 .list(*fns,nonempty=True) - .list() but SynErr if returned list is length 0
 .comma_list(*fns) - like .list() but consumes a comma after each successful fn call. If unable to consume a comma or unable to successfully call any fn in `fns`, then terminate and return the list of results. (Allows trailing comma)
 .comma_list(*fns,nonempty=True) - .comma_list() but SynErr if returned list is length 0
-.build_node_delayed(*args,**kwargs) returns a argless function that calls .build_node(*args,**kwargs). Useful for generating argless closures for use in xor
 
 Internal:
 .next() - generally called internally to step .tok forward
 
 Primitives:
-.tok - current token
+.curr - current token
 .token(tok_like)
 .keyword(kw_str)
 .identifier()
@@ -389,7 +384,7 @@ class Parser():
         if self.idx >= len(self.elems):
             raise SyntaxError("Calling next() when already passed the last elem")
 
-        # starting on the second call to next() while in the no_whitespace() contextmanager, make sure that theres no whitespace trailing on the token 2 before whichever one next() will result in .tok pointing to.
+        # starting on the second call to next() while in the no_whitespace() contextmanager, make sure that theres no whitespace trailing on the token 2 before whichever one next() will result in .curr pointing to.
         if self.no_ws and not self.no_ws_initial:
             if len(self.prev.verbatim) != len(self.prev.data): # True if has trailing whitespace
                 raise SyntaxError
@@ -459,36 +454,41 @@ class Parser():
         Note that `True` is just returned so it can be used with .or_false
         Step forward on success
         `tok_like` can be:
-            str: for example '(' is the same as RPAREN. To be specific the str should equal self.tok.data
+            str: for example '(' is the same as RPAREN. To be specific the str should equal self.curr.data
             CONSTANT: e.g. RPAREN
             list: a list of strs/CONSTANTs, and if any of them matches it succeeds. BINOPS is an example list.
         """
         if not isinstance(tok_like,(list,tuple)):
             tok_like = [tok_like] # wrap in a list
+
+        data = self.curr.data
+        if '  ' in data:
+            # Turn multispaces into single spaces
+            data = ' '.join(list(filter(None,data.split(' '))))
         for tok_or_str in tok_like:
             assert isinstance(tok_or_str,(str,CONSTANT))
-            if self.tok.typ == tok_or_str or self.tok.data == tok_or_str:
+            if self.curr.typ == tok_or_str or data == tok_or_str:
                 self.next()
                 return True
-        raise SyntaxError(f"Failed to match token. Wanted: {tok} Got: {self.tok}")
+        raise SyntaxError(f"Failed to match token. Wanted: {tok} Got: {self.curr}")
     def keyword(self,kw):
         """
         Return True if next token is the keyword `kw` (str), else raise SyntaxError
         Step forward on success
         ///////Returns bool indicating if next token is the keyword `kw` (str). Step forward on success.
         """
-        if self.tok.typ is KEYWORD and self.tok.data == kw:
+        if self.curr.typ is KEYWORD and self.curr.data == kw:
             self.next()
             return True
-        raise SyntaxError(f"Failed to match keyword. Wanted: {kw} Got: {self.tok}")
+        raise SyntaxError(f"Failed to match keyword. Wanted: {kw} Got: {self.curr}")
     def identifier(self):
         """
         Checks if curr tok is an identifier if so step forward and return identifier string, if not raise SyntaxError
         """
-        if self.tok.typ is ID:
+        if self.curr.typ is ID:
             self.next()
-            return self.tok.data
-        raise SyntaxError(f"Failed to get an identifier. Got: {self.tok}")
+            return self.curr.data
+        raise SyntaxError(f"Failed to get an identifier. Got: {self.curr}")
     def empty(self):
         """
         Bool indicating if reached end of token stream
@@ -558,9 +558,9 @@ class Parser():
 
     @contextmanager
     def _compound_atom_parser(self,atom_cls,attr='body'):
-        if not isinstance(self.tok,atom_cls):
-            raise SyntaxError(f"Attempting to parse {atom_cls} but found {self.tok}")
-        elems_list = getattr(self.tok,attr)
+        if not isinstance(self.curr,atom_cls):
+            raise SyntaxError(f"Attempting to parse {atom_cls} but found {self.curr}")
+        elems_list = getattr(self.curr,attr)
 
         def isin(val,list): # like 'in' but uses `is` instead of `==`
             return any([x is val for x in list])
@@ -582,7 +582,7 @@ class Parser():
 
         # only runs on success
         self.parsed.append(elems_list)
-        if isin(p.tok.body,self.parsed) and (not hasattr(self.tok,'head') or isin(p.tok.head,self.parsed)):
+        if isin(p.curr.body,self.parsed) and (not hasattr(self.curr,'head') or isin(p.curr.head,self.parsed)):
             self.next() # step forward past this compound atom if 'head' (if exists) and 'body' have both been parsed
     ## BNF TYPES
     def parameter_list(self,no_annotations=False):
@@ -669,7 +669,7 @@ class Parser():
     def target_list(p):
         return p.comma_list(p.target,nonempty=True)
     ## META FNS
-    def logical_xor(self,*option_fns):
+    def logical_or(self,*option_fns):
         for fn in option_fns: # try each fn
             with self.maybe():
                 return fn()
@@ -702,12 +702,18 @@ class Parser():
         val = fn()
         aliased_name = self.or_none(as_ident)
         return Alias(val,aliased_name)
+    def dotted_name(self):
+        """
+        dotted_name ::= identifier ("." identifier)*
+        """
+        def dot_name():
+            p.token('.')
+            return p.identifier()
+        with p.no_whitespace():
+            return [p.identifier()] + p.list(dot_name)
+
 
     ## BUILDING AND IDENTIFYING ODES
-    def build_node_delayed(self,*args,**kwargs):
-        def fn():
-            return build_node(*args,**kwargs)
-        return fn
     def build_node(self,nodeclass,leftnode=None,**kwargs):
         assert not issubclass(nodeclass,(InitExpr,InitStmt)), f"Can't use build_node with {nodeclass} because it's an InitExpr or InitStmt. Most likely you want to find a ExprGenerator or StmtGenerator that builds this InitExpr/InitStmt and call that."
         assert hasattr(nodeclass,'build') or hasattr(nodeclass,'identify'), f"{nodeclass} must have either build() or identify() methods"
@@ -751,7 +757,7 @@ class Parser():
         non_recursive = []
         for cls in nodeclasses:
             if not nodeclass.left_recursive:
-                non_recursive.append(self.build_node_delayed(cls))
+                non_recursive.append(lambda:build_node(cls))
 
         node = self.logical_xor(*non_recursive) # this can throw synerr
 
@@ -763,7 +769,7 @@ class Parser():
             for cls in nodeclasses:
                 if nodeclass.left_recursive and ty in nodeclass.left_types:
                     # key difference is `leftnode=node`
-                    non_recursive.append(self.build_node_delayed(cls,leftnode=node))
+                    non_recursive.append(lambda:build_node(cls,leftnode=node))
 
             node_or_none = self.or_none.logical_xor(*non_recursive)
             if node is None: # exit on failure to expand more
@@ -779,14 +785,14 @@ class Parser():
         """
         Same deal as trunk_expr have something like an @decorator for labelling class with a keyword
         """
-        if isinstance(self.tok,AColonList):
+        if isinstance(self.curr,AColonList):
             # compound statement
-            potential_kw = self.tok.head[0]
+            potential_kw = self.curr.head[0]
             kw = None if potential_kw.typ is not KEYWORD else potential_kw.data
             classes = compound_stmt_nodes[kw]
         else:
             # simple statement
-            potential_kw = self.tok
+            potential_kw = self.curr
             kw = None if potential_kw.typ is not KEYWORD else potential_kw.data
             classes = simple_stmt_nodes[kw]
 
@@ -795,7 +801,7 @@ class Parser():
 
         build_fns = []
         for cls in classes:
-            build_fns.append(self.build_node_delayed(cls))
+            build_fns.append(lambda:self.build_node(cls))
 
         return p.logical_xor(*build_fns)
     def __getattr__(self,key):
@@ -2145,14 +2151,8 @@ class Decorator(AuxNode):
         self.args = args # Arguments | None
     @staticmethod
     def build(p):
-        def dotted_name():
-            def dot_name():
-                p.token('.')
-                return p.identifier()
-            with p.no_whitespace():
-                return [p.identifier()] + p.list(dot_name)
         p.token('@')
-        name_list = dotted_name()
+        name_list = p.dotted_name()
         args = p.or_none.argument_list()
         return Decorator(name_list,args)
 
@@ -2412,7 +2412,7 @@ class Assignment(Stmt):
             p.target_list()
             p.token('=')
         targets = p.list(target_list,nonempty=True)
-        val = p.logical_xor(p.starred_expression,p.build_node_delayed(YieldExpression))
+        val = p.logical_xor(p.starred_expression,lambda:p.build_node(YieldExpression))
         return Assignment(targets,val)
 
 AUGOPS = ["+" , "-" , "*" , "@" , "/" , "//" , "%" , "**" , ">>" , "<<" , "&" , "^" , "|"]
@@ -2435,14 +2435,14 @@ class AugAsn(Stmt):
         target = p.augtarget()
 
         # dealing with operator
-        op = p.tok.typ
-        no_trailing_ws = (len(p.tok.verbatim) == len(p.tok.data))
+        op = p.curr.typ
+        no_trailing_ws = (len(p.curr.verbatim) == len(p.curr.data))
         p.token(AUGOPS)
         if not no_trailing_ws: # e.g. "+ ="
             raise SyntaxError
         p.token("=")
 
-        val = p.logical_xor(p.expression_list,p.build_node_delayed(YieldExpression))
+        val = p.logical_xor(p.expression_list,lambda:p.build_node(YieldExpression))
         return Assignment(target,op,val)
 
 @simple(None)
@@ -2609,12 +2609,7 @@ class Import(StmtGenerator):
         """
         def module(): # returns (str list)
             """ module ::=  (identifier ".")* identifier """
-            def id_dot():
-                name = p.identifier()
-                p.token('.')
-                return name
-            with p.no_whitespace():
-                return p.list(id_dot) + [p.identifier()]
+            return p.dotted_name()
         def relative_module(): # returns tuple(ndots,(str|None))
             """ relative_module ::=  "."* module | "."+ """
             def dot():
@@ -3086,22 +3081,22 @@ class Int(Num):
     @staticmethod
     def build(p):
         p.token(INTEGER)
-        return Int(int(p.tok.data))
+        return Int(int(p.curr.data))
 class Float(Num):
     @staticmethod
     def build(p):
         p.token(FLOAT)
-        return Float(float(p.tok.data))
+        return Float(float(p.curr.data))
 class Complex(Num):
     @staticmethod
     def build(p):
         p.token(COMPLEX):
-        return Complex(complex(p.tok.data))
+        return Complex(complex(p.curr.data))
 class Bytes(Lit):
     @staticmethod
     def build(p):
         p.token(BYTES):
-        return Bytes(bytes(p.tok.data))
+        return Bytes(bytes(p.curr.data))
 class NamedConstant(Lit):
     @staticmethod
     def build(p):
@@ -3116,7 +3111,7 @@ class Str(Lit):
     @staticmethod
     def build(p):
         p.quote():
-        return Str(p.tok.data)
+        return Str(p.curr.data)
 
 class UnopL(Expr):
     def __init__(self,val):
@@ -3125,7 +3120,7 @@ class UnopL(Expr):
     @staticmethod
     def identify(p):
         if p.or_false.token(UNOPSL):
-            return unopl_subclass[p.tok.typ]
+            return unopl_subclass[p.curr.typ]
         raise SyntaxError
     @classmethod
     def gen_build(cls,type):
@@ -3271,7 +3266,7 @@ class Binop(AbstractExpr):
     @staticmethod
     def identify(p):
         if p.or_false.token(BINOPS):
-            return binop_subclass[p.tok.typ]
+            return binop_subclass[p.curr.typ]
         raise SyntaxError
     @classmethod
     def gen_build(cls,rhstype):
@@ -3354,7 +3349,7 @@ class Compare(Expr):
         vals = [leftnode]
         ops = []
         def extend():
-            op = p.tok.typ
+            op = p.curr.typ
             p.token(CMPOPS)
             val = p.or_expr()
             ops.append(op)
@@ -3470,7 +3465,6 @@ regex_of_token = {
 
     # UNOPS
     INVERT    : regex_compile(r'~'),
-    NOT       : regex_compile(r'not'),
     # note that ADD and SUB can also be unops like SUB in '-x' and ADD in '+x' (leaves arg unchanged),
 
     # BOOLOPS
@@ -3484,10 +3478,11 @@ regex_of_token = {
     GT        : regex_compile(r'>'),
     EQ        : regex_compile(r'=='), # BEFORE EQ
     NEQ       : regex_compile(r'!='),
-    IS        : regex_compile(r'is'), # BEFORE ID
     ISNOT     : regex_compile(r'is\s+not'), # BEFORE ID
-    IN        : regex_compile(r'in'), # BEFORE ID
+    IS        : regex_compile(r'is'), # BEFORE ID
     NOTIN     : regex_compile(r'not\s+in'), # BEFORE ID
+    NOT       : regex_compile(r'not'),
+    IN        : regex_compile(r'in'), # BEFORE ID
 
     ASN       : regex_compile(r'='),
     ESCQUOTE2 : regex_compile(r'\\\"'),
