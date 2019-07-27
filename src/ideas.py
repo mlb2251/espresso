@@ -58,11 +58,17 @@ match type(x) with:
         match x%2 == 0 with:
             | True -> print("even int")
             | False-> print("odd int")
-    | str ->
+    | str | bool ->
         print("string")
         print("multiline is fine!")
     | _ ->
         print("here's a catch-all")
+
+x = (match type(x) with |int -> 3 |str|bool -> 4)
+x = (match type(x) with
+        |int -> 3
+        |str|bool -> 4
+        )
 
 
 # ARGMATCH
@@ -91,7 +97,7 @@ argmatch x when x.is_digit():
     | foo() -> x + "goodbye"
 
 
-y ::=
+y =:
     match x%2 with:
         | 0 -> x
         | 1 -> x+1

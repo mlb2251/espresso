@@ -14,6 +14,7 @@ keywords = set(kwlist)
 TODO
 -p.next_line() and make save_state() work with it
 -p.stmts()
+-fyi argless lambdas are already a thing so use them!
 -assert that end of line is reached after each stmt is parsed
 -change .tok to .curr since it can be an Atom as well?
 -use .alias() in all those places i did it manually before
@@ -26,17 +27,18 @@ note: i guess we cut the _stmt postfix off most of our classes (Assignment inste
 -switch all uses of parens() brackets() etc to `with` stmts
 - Make it so theres a .yield_expression() instead that does .build_node(yield_expression) and just do that for everything in the BNF. Maybe make an autogenerator based on all Nodes having a .bnf field that gives the string (not decorator-added, rather have it be a classic class field assignment thing). Then at the bottom of the module scan thru all globals() for things that are Nodes and check if they have bnf not-None and if so add their methods to Parser.
 - write documentation for everything at top of this file, as youve already started!
--Remake stmts, and decorate them all
 -`Not` shd not be in UnopL bc of precedence
 -comp_for needs internal recursion as in LRM bc its used in generators too so unless you wanna track dependencies you gotta go verbatim
 -add the blank-to-None conversion for special cases like return stmts -- thats prob in the Return syntax already
 -make it so tok_like will match 'not   in' when asked about 'not in' etc. Generalize it for any whitespace in any string reducing to just one. Only try on initial failure to save a bit.
 -add autoinserted return None stmt at the end of fns
 -make a ident.ident.ident shorthand (with no_whitespace) like dotted_name (use in Decorator, Import, etc)
--make it so @compound can take '@' for example
+-make it so @compound can take '@' for example (used for decorators)
 -note my argument_list() actually includes the parens and opt trailing comma already
--with AugAsn you need to ensure its a proper operator (not just BINOP eg not 'and') and ensure theres no whitespace captured by the regex after the operator, ie .data == .verbatim. This is all to avoid annoying parsing overhead with *= and such being tokens that have to come before the more common operators.
 -we need to deal with cases like AttributeRef where x.y is okay but x .y or x. y are not okay, likewise in import statement "mod1. mod2" is not okay. Basically i think this applies pretty consistently to certain tokens like '.' and maybe brackets. Could have a no_whitespace() contextmanager perhaps that changes the behavior of .tok to forbid whitespace.
+-desugaring MatchExpr seems tricky. MatchStmt wouldn't be hard.
+-parse_expr(str): return parse(str).expr # ExpressionStmt->Expr
+    -more shorthands for parsing args and such and any other case
 Quote stuff:
     - Finish QUOTE1/QUOTE2 -> QUOTE merge
     - HEREDOC token integrate
@@ -90,6 +92,7 @@ Quote stuff:
 
 -maybe have token() return a Tok to make stuff like Compare better
 -Args and Formals probably want to be rewritten as __init__(etc etc etc) and build(p) so that they can be instantiated without parser.
+-make MatchExpr syntax more solidified
 
 Don't worry .identify is always called with peek(), you dont need to manage that
 
@@ -1927,6 +1930,9 @@ class Parameters(AuxNode):
         self.stararg = stararg
         self.kwonlyargs = kwonlyargs
         self.doublestararg = doublestararg
+    @staticmethod
+    def argless():
+        return Parameters(args=[],stararg=None,kwonlyargs=[],doublestararg=None)
     @staticmethod
     def build(p,no_annotations=False):
         """
