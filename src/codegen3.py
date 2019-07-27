@@ -10,13 +10,16 @@ keywords = set(kwlist)
 
 
 """
-
 TODO
+-note on resuming this after a break you really need to look thru example code to remind yourself all the tools. In particular read each function of Parser (some but not all were copied to this massive commant section at the top of the file)
 -p.next_line() and make save_state() work with it
 -p.stmts()
 -fyi argless lambdas are already a thing so use them!
 -assert that end of line is reached after each stmt is parsed
 -change .tok to .curr since it can be an Atom as well?
+-Note that all expression desugaring can desugar to a function call (potentially with argless lambdas for some arguments for lazy eval).
+-All stmt desugaring can desguar to a list of statements
+-Runtime errors for generated code: Definitely need to try/except the errors in any generated code and reemit errors that have proper information. Shouldn't be too hard to get the right line number info. I guess any expression desurgaring can always emit a function call which can be decorated to do the try/except. Then statement desurgaring can just have the whole block wrapped in try/except. Def gotta think a bit about what to put in except, but I feel like it's doable. Just gotta be very robust with writing helpful error messages for each class tho
 -use .alias() in all those places i did it manually before
 - add a .bnf field to all Nodes (where applicable)
 - make notes about how expression_list starred_expression and starred_list all yield Tuples or Exprs rather than python lists, unless as_expr=False is passed to them, and the LRM says this should only really be done for SetDisplay and ListDisplay. target_list, parameter_list, etc all yield python lists.
