@@ -11,9 +11,10 @@ keywords = set(kwlist)
 
 """
 TODO
+-figure out the atoms <-> Parser interface
 -note on resuming this after a break you really need to look thru example code to remind yourself all the tools. In particular read each function of Parser (some but not all were copied to this massive commant section at the top of the file)
--p.next_line() and make save_state() work with it
--p.stmts()
+-replace `.parsed` with something else
+-add .emit() for self->str for all nodes.
 -fyi argless lambdas are already a thing so use them!
 -assert that end of line is reached after each stmt is parsed
 -Note that all expression desugaring can desugar to a function call (potentially with argless lambdas for some arguments for lazy eval).
@@ -258,20 +259,8 @@ Notes on performance with throwing/catching exceptions:
 
 
 
-# TODO the next thing to do is get target, target_list, and starred expressions down really well in terms of what they mean and parsing, because they're super important.
-# TODO furthermore the idea of hierarchy seems good. I've been doing this linear left_recursive expansion method which is GOOD but perhaps one thing you can do is rework that to be a series of or_expr() and_expr() calls etc? Like literally follow the language model? Where or_expr can be anything below a bitwise `|`, etc. Or perhaps make expr take a keyword that's literally 'target' or 'or_expr'. Then make sure it composes with multiple targets ofc.
-    ## it would be overkill to have anything below or_expr(). You should have or_expr, or_test, conditional_expression, expression, expression_list, expression_nocond, starred_expression(==starred_list), [target, target_list == not expressions but still imp]. No need for lambdas separate from expression[_nocond]. We're only writing these for exprs that are reused in other places.
-    ## note that an expression_list
 
 """
-
-token(tok) - consume a token if it matches and ret bool indicating success
-keyword(kw) - consume a keyword if it matches and ret bool indicating success
-identifier() - consume an ID and return its str on success or None on failure
-empty() - ret bool indicating if self.idx is pointing beyond the end of self.elems
-or_expr/or_test/target/target_list/etc - consume tokens and return AST node. Raise SyntaxError on failure.
-p.must.fn() - assert that a fn like token/keyword/empty/etc did not return None or False. Very important.
-p.or_none.fn() - Try to run a fn that might raise a SyntaxError and return normal results if no exceptions are raised but return None if SyntaxError is raised. This also will reset the token stream to wherever the call started on failure.
 
 or_expr - this is a bitor/bitxor/bitand/shift/a/m/u/power_expr in that order
 
@@ -346,8 +335,8 @@ def locate(fn):
         start_i = p.idx
         ret = fn(p,*args,**kwargs)
         end_i = p.idx-1
-        start = p.elems[start_i].loc.start
-        end = p.elems[end_i].loc.end
+        start = p.astmt[start_i].loc.start
+        end = p.astmt[end_i].loc.end
         if isinstance(ret,Node):
             ret.loc = Pos(start,end)
         return ret
@@ -355,11 +344,12 @@ def locate(fn):
 
 
 class Parser():
-    def __init__(self,elems):
+    def __init__(self,astmt_list):
         super().__init__()
-        self.elems = elems # list of Tokens/Atoms
-        self.idx = 0
-        self.must = AssertCallWrapper(self)
+        self.astmt_list = astmt_list # AStmt list
+        self.line_idx = 0 # index of line (indexes into self.astmt_list)
+        self.idx = 0 # index within curr line (indexes into result of self.astmt_list[self.line_idx])
+        #self.must = AssertCallWrapper(self)
         #self.not_none = NotNoneCallWrapper(self) # or_none is most encouraged
         self.or_none = Postprocessor(self,None) # or_none is most encouraged
         self.or_fail = Postprocessor(self,FAIL)
@@ -368,6 +358,7 @@ class Parser():
         self.no_ws = False # indicates if whitespace after tokens is currently allowed
         self.no_ws_initial = False # used by no_whitespace()
         self.parsed = [] # list of token/atom lists that have been parsed. Used for .head and .body elements using `is` comparisons to check the pointers and see if theyve been parsed
+        #self.parsed_fields = []
     def save_state(self):
         def deepcopy(val): # esp important for self.parsed
             if isinstance(val,list):
@@ -381,37 +372,40 @@ class Parser():
     def load_state(self,state):
         self.__dict__ = state
     def next(self):
-        if self.idx >= len(self.elems):
+        if self.idx >= len(self.astmt):
             raise SyntaxError("Calling next() when already passed the last elem")
 
         # starting on the second call to next() while in the no_whitespace() contextmanager, make sure that theres no whitespace trailing on the token 2 before whichever one next() will result in .curr pointing to.
         if self.no_ws and not self.no_ws_initial:
             if len(self.prev.verbatim) != len(self.prev.data): # True if has trailing whitespace
                 raise SyntaxError
-
-
         if self.no_ws and self.no_ws_initial:
             self.no_ws_initial = False
+
         self.idx += 1
-        return
+    def next_line(self):
+        if self.line_idx >= len(self.astmt_list):
+            raise SyntaxError("Calling next_line() when already passed the last astmt")
+        if not self.empty():
+            raise SyntaxError("Calling next_line() without consuming all tokens on the current line")
+        self.line_idx += 1
+
     ## FUNDAMENTALS
     @property
-    def tok(self):
-        if self.idx >= len(self.elems):
-            raise SyntaxError("Ran out of elems to consume")
-        token = self.elems[self.idx]
-
-        # if self.no_ws, raise SynErr on trailing whitespace
-        if self.no_ws and isinstance(token,Tok):
-            if len(token.data) != len(token.verbatim):
-                raise SyntaxError
-
-        return token
+    def curr(self):
+        if self.idx >= len(self.astmt):
+            raise SyntaxError("Ran out of astmt items to consume")
+        return self.curr_line[self.idx]
+    @property
+    def curr_line(self):
+        if self.line_idx >= len(self.lines):
+            raise SyntaxError("Ran out of astmt_list items to consume")
+        return self.astmt_list[self.line_idx]
     @property
     def prev(self):
-        if self.idx-1 >= len(self.elems):
-            raise SyntaxError("Ran out of elems to consume")
-        return self.elems[self.idx-1]
+        if self.idx-1 >= len(self.astmt):
+            raise SyntaxError("Ran out of astmt to consume")
+        return self.astmt[self.idx-1]
     def comma_list(self,*fns,nonempty=False,as_expr=False,allow_trailing_comma=True):
         """
         Decorator that calls fn() in a loop and returns a list of the results. List is empty if first call fails.
@@ -493,7 +487,12 @@ class Parser():
         """
         Bool indicating if reached end of token stream
         """
-        return len(self.idx) >= len(self.elems)
+        return len(self.idx) >= len(self.curr_line)
+    def finished(self):
+        """
+        Bool indicating if out of token streams
+        """
+        return len(self.line_idx) >= len(self.astmt_list)
     def assert_empty(self):
         if not self.empty():
             raise SyntaxError
@@ -560,16 +559,18 @@ class Parser():
     def _compound_atom_parser(self,atom_cls,attr='body'):
         if not isinstance(self.curr,atom_cls):
             raise SyntaxError(f"Attempting to parse {atom_cls} but found {self.curr}")
-        elems_list = getattr(self.curr,attr)
+        astmt_list = getattr(self.curr,attr)
 
         def isin(val,list): # like 'in' but uses `is` instead of `==`
             return any([x is val for x in list])
 
-        if isin(elems_list,self.parsed):
-            raise SyntaxError("Already parsed this elems_list successfully!")
+        #assert attr not in self.parsed_fields
+        #parsed_fields.append(attr)
+        if isin(astmt_list,self.parsed):
+            raise SyntaxError("Already parsed this astmt_list successfully!")
 
-        old_elems,old_idx = self.elems, self.idx
-        self.elems = elems_list
+        old_astmt,old_idx = self.astmt, self.idx
+        self.astmt = astmt_list
         self.idx = 0
         try:
             yield None
@@ -577,11 +578,11 @@ class Parser():
             if not self.empty():
                 raise SyntaxError(f"Unparsed remaining contents of a {atom_cls} is an error")
         finally:
-            self.elems = old_elems
+            self.astmt = old_astmt
             self.idx = old_idx
 
         # only runs on success
-        self.parsed.append(elems_list)
+        self.parsed.append(astmt_list)
         if isin(p.curr.body,self.parsed) and (not hasattr(self.curr,'head') or isin(p.curr.head,self.parsed)):
             self.next() # step forward past this compound atom if 'head' (if exists) and 'body' have both been parsed
     ## BNF TYPES
@@ -730,19 +731,24 @@ class Parser():
                 if cls is None:
                     raise SyntaxError
             node = self.build_node(cls,leftnode=leftnode,**kwargs)
+            output_check(node)
             return node
 
         # left_recursive case
         if isinstance(nodeclass,Expr) and nodeclass.left_recursive:
             assert leftnode is not None, "Can't call build_node on a left_recursive node without a non-None leftnode"
             node = nodeclass.build(self,leftnode=leftnode,**kwargs)
-            assert node is not None, f"{nodeclass}.build returned None"
+            output_check(node)
             return node
+
+        # stmts
 
         # not left_recursive case
         assert leftnode is None, "Can't call build_node on a NON left_recursive node with a non-None leftnode"
         node = nodeclass.build(self,**kwargs)
-        assert node is not None, f"{nodeclass}.build returned None"
+        output_check(node)
+        if isinstance(nodeclass,Stmt): # step the parser a line forward if you just parsed a stmt
+            self.next_line()
         return node
     def trunk_expr(self, type):
         """
@@ -781,10 +787,15 @@ class Parser():
                 break
 
         return node
+    def stmts(self):
+        """
+        Parse stmts until empty
+        """
+        ret = []
+        while not self.finished():
+            ret.append(self.stmt())
+        return ret
     def stmt(self):
-        """
-        Same deal as trunk_expr have something like an @decorator for labelling class with a keyword
-        """
         if isinstance(self.curr,AColonList):
             # compound statement
             potential_kw = self.curr.head[0]
@@ -799,9 +810,7 @@ class Parser():
         if len(classes) == 0:
             raise SyntaxError(f"No valid classes found for leading keyword {potential_kw}"
 
-        build_fns = []
-        for cls in classes:
-            build_fns.append(lambda:self.build_node(cls))
+        build_fns = [(lambda:self.build_node(cls)) for cls in classes]
 
         return p.logical_xor(*build_fns)
     def __getattr__(self,key):
@@ -953,7 +962,7 @@ await_expr ::= "await" primary
 
 
 
-# TODO you frequently call token(elems,'*',fail=BOOL) for an if-statement followed by the exact same thing again, which ends up being the same as elems = elems[1:]. You could add a fn to do this for you, or actually it's more clear to just say elems = elems[1:] directly. You should probably switch to doing that as a compromise of readability and speed
+# TODO you frequently call token(astmt,'*',fail=BOOL) for an if-statement followed by the exact same thing again, which ends up being the same as astmt = astmt[1:]. You could add a fn to do this for you, or actually it's more clear to just say astmt = astmt[1:] directly. You should probably switch to doing that as a compromise of readability and speed
 
 #TODO fig out missing colon errors ahead! You prob have to do it during the atomize step while handling an IndentationError
 
@@ -1294,19 +1303,19 @@ A better one would just be a fn that replaces Foo.fn = thedecorator(Foo.fn) inst
 
 
 #    # simple statements that don't start with keywords
-#    e, rest = expr(elems)
+#    e, rest = expr(astmt)
 #    # ExpressionStmt
 #    if rest == []:
-#        return ExpressionStmt(elems) # to make a .identify for this probably just have it run .expr_assert_empty with fail=BOOL or whatever
+#        return ExpressionStmt(astmt) # to make a .identify for this probably just have it run .expr_assert_empty with fail=BOOL or whatever
 #    # Asn
 #    if istoken(rest,0,EQ):
-#        return Asn(elems)
+#        return Asn(astmt)
 #    # AugAsn
 #    if istoken(rest,0,BINOPS) and istoken(rest,1,EQ):
-#        return AugAsn(elems)
+#        return AugAsn(astmt)
 
 """
-Returns the first valid expression that starts at elems[0] and is not the subexpression of a larger expression in `elems`, and also returns the remains of `elems`
+Returns the first valid expression that starts at astmt[0] and is not the subexpression of a larger expression in `astmt`, and also returns the remains of `astmt`
 
 note: don't worry if you see stuff like ABracket being translated into a dict always. That's only what happens when we ask for an expression and it START with {}. You can still make your own nondict syntax using {} as long as you don't start a generic expr with the '{' symbol. If you do want to override the kinds of things that can happen when an expr starts with '{' you are also welcome to do that, just modify the code to look harder at it and decide between Dict() and whatever your AST node is.
 
@@ -1471,7 +1480,7 @@ trunk_nodes = {
 """
 The issue with Tuples, and the solution:
     The Tuple constructor must necessarily call expr() somewhat recursively in order to parse the expressions that make it up.
-    An initially promising idea is to have the Tuple.init(e_lhs,elems) function call expr(elems) to recurse just as Binops, Boolops, and all other left-recursive forms have been doing. Say we're parsing expr("x,y,z") then the first call would be Tuple.init("x",",y,z") which would result in a new expr call expr("y,z"), which would subsequently yield an expr("z") after yet another Tuple.init. It's obvious that expr("y,z") should return a Tuple and expr("z") should return a Var. So logically Tuple.init() could use the result of its expr() call to A) if the result is a tuple then prepend whatever your lhs is onto the Tuple to create a tuple of slightly larger size and B) if the result is not a tuple then for a new 2-tuple from your lhs and the expression result. The issue with this: what if the input was expr("x,y,(a,b)")? Then the expr("a,b") call would return a Tuple whic would get merged with the lhs ("y") to form a 3-tuple y,a,b.
+    An initially promising idea is to have the Tuple.init(e_lhs,astmt) function call expr(astmt) to recurse just as Binops, Boolops, and all other left-recursive forms have been doing. Say we're parsing expr("x,y,z") then the first call would be Tuple.init("x",",y,z") which would result in a new expr call expr("y,z"), which would subsequently yield an expr("z") after yet another Tuple.init. It's obvious that expr("y,z") should return a Tuple and expr("z") should return a Var. So logically Tuple.init() could use the result of its expr() call to A) if the result is a tuple then prepend whatever your lhs is onto the Tuple to create a tuple of slightly larger size and B) if the result is not a tuple then for a new 2-tuple from your lhs and the expression result. The issue with this: what if the input was expr("x,y,(a,b)")? Then the expr("a,b") call would return a Tuple whic would get merged with the lhs ("y") to form a 3-tuple y,a,b.
     The solution: add a flag to expr so that it doesn't recurse on tuple-building. Yep it's lame, really the interesting bit was the way that the initially promising idea was wrong.
 """
 
@@ -1484,7 +1493,7 @@ The following method is guaranteed to work for binary and unary operators of the
     | Expr op      # right unop
     | op Expr      # left unop
 Following the example `x + 5*z.y - 3`
-1. Read elems until you have the smallest possible valid Expr e that starts from the first elem
+1. Read astmt until you have the smallest possible valid Expr e that starts from the first elem
     e=`x`. We may be fed an operator `prevop` by our caller. If we aren't then `op` is None.
 2. Check if the next elem(s) indicate that e could be a lhs subexpression
     `+` is part of the rule [Expr:==Expr '+' Expr]
@@ -1802,8 +1811,8 @@ class Node(LocTagged): # abstract class, should never be instatiated
 
 def stmts(elem_list_list): # [[elem]] -> [Stmt]
     the_stmts = []
-    for elems in elem_list_list:
-        the_stmt = stmt(elems)
+    for astmt in elem_list_list:
+        the_stmt = stmt(astmt)
         if the_stmt.dependent and the_stmts[-1].offer_neighbor(the_stmt):
             continue # e.g. Try consuming Except by accepting it as a neighbor
         elif the_stmt.dependent:
@@ -1875,14 +1884,14 @@ class ClassDef(Stmt):
         self.body = stmts(compound.body)
 
 
-#def comma_split(elems): # [elem] -> [[elem]]
+#def comma_split(astmt): # [elem] -> [[elem]]
 #    res = []
 #    prev_comma_idx = -1
-#    for i in range(elems):
-#        if isinstance(elems[i],Tok) and elems[i].typ is COMMA:
-#            res.append(elems[prev_comma_idx+1:i])
+#    for i in range(astmt):
+#        if isinstance(astmt[i],Tok) and astmt[i].typ is COMMA:
+#            res.append(astmt[prev_comma_idx+1:i])
 #            prev_comma_idx = i
-#    res.append(elems[prev_comma_idx+1:])
+#    res.append(astmt[prev_comma_idx+1:])
 #    return res
 
 class Arg(AuxNode):
@@ -2338,12 +2347,12 @@ class With(Stmt):
         self.withitems = []
 
         head = keyword(head,"with")
-        while not empty(elems,fail=BOOL):
-            contextmanager,elems = expr(elems,till=(',',INCLUSIVE))
+        while not empty(astmt,fail=BOOL):
+            contextmanager,astmt = expr(astmt,till=(',',INCLUSIVE))
             target = None
-            if keyword(elems,'as',fail=BOOL):
-                keyword(elems,'as')
-                target,elems = target(elems,till=(',',INCLUSIVE))
+            if keyword(astmt,'as',fail=BOOL):
+                keyword(astmt,'as')
+                target,astmt = target(astmt,till=(',',INCLUSIVE))
             self.withitems.append(Withitem(contextmanager,target))
 
         if len(self.withitems) == 0
@@ -3001,7 +3010,7 @@ class ParenthForm(ExprGenerator):
     def build(p):
         with p.parens() as p:
             body = p.starred_expression()
-            if len(body) == 1 and p.elems[-1].typ != COMMA:
+            if len(body) == 1 and p.astmt[-1].typ != COMMA:
                 return body[0] # eval to the single expression in the list
 
         return Tuple(body) # includes len==0 empty tuple case
@@ -3125,10 +3134,10 @@ class UnopL(Expr):
     @classmethod
     def gen_build(cls,type):
     def build(p):
-        op = elems[0].typ
+        op = astmt[0].typ
         cls = unopl_subclass(op)
-        val,elems = expr(elems[1:],leftnodeclass=cls)
-        return cls(val),elems
+        val,astmt = expr(astmt[1:],leftnodeclass=cls)
+        return cls(val),astmt
         raise NotImplementedError(f"Unrecongized left unary operator: {op}")
 class UAdd(UnopL):pass
 class USub(UnopL):pass
@@ -3698,7 +3707,8 @@ def parse(lines,globals=None,interpreter=False,debug=False):
         print("INCOMPLETE")
         exit(0)
         return INCOMPLETE
-    ast = make_ast(masteratom)
+    p = Parser(masteratom.body)
+    ast = p.stmts()
     #debug.print(ast)
     ast = comment_mods(commentlinedata,ast) # does whatever mods we want comments to be able to do to the tree
     debug.print(ast)
