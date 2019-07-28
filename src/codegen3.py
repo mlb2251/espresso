@@ -12,6 +12,8 @@ keywords = set(kwlist)
 """
 TODO
 -figure out the atoms <-> Parser interface
+-i guess comment out SH related stuff for now then figure it out later
+    -Btw what wrong with just having a function sh() that takes a string? Could even be a python class with __call__ so more functionality could be added like sh.err(cmd) sh.background(cmd) etc.
 -note on resuming this after a break you really need to look thru example code to remind yourself all the tools. In particular read each function of Parser (some but not all were copied to this massive commant section at the top of the file)
 -replace `.parsed` with something else
 -add .emit() for self->str for all nodes.
@@ -243,18 +245,6 @@ Notes on performance with throwing/catching exceptions:
 
 """
 
-
-    def __init__(self,x):
-        super().__init__()
-        self.x = x
-        self.x = x
-        self.x = x
-    @staticmethod
-    def build(p):
-        """
-        annotated_assignment_stmt ::=  augtarget ":" expression ["=" expression]
-        Returns Assignment | Var | AttributeRef | Subscription | Slicing (note how the Assignment "=" bit is optional)
-        """
 
 
 
@@ -1004,12 +994,17 @@ await_expr ::= "await" primary
 def tokinfo(tok):
     return f"'{tok.verbatim}' at {tok.loc.start.line}:{tok.loc.start.char}"
 
-def atomize(tokenized_lines, interpreter):
-    if atomize.saved_stack is not None:
-        stack = atomize.saved_stack
-        atomize.saved_stack = None
-    else:
-        stack = [AMasterList()]
+def atomize(tokenized_lines, error_on_incomplete):
+    """
+    LineData list -> AStmt list
+
+    Atom:
+        .closer: list of token types that will terminate building this atom
+        .error_on: list of token types that will cause an error while building this atom
+        .allowed_children: list of token types we're allowed to recurse into while building this atom
+
+    """
+    stack = [AMasterList()]
 
     def pop():
         stack[-1].finish()
@@ -1023,13 +1018,14 @@ def atomize(tokenized_lines, interpreter):
             pop()
         for tok in linedata.linetkns:
             #u.gray(tok)
-            if tok.typ == stack[-1].closer: # `closer` must be defined by each atom
+            if tok.typ == stack[-1].closer:
                 pop()
             elif tok.typ in stack[-1].error_on:
                 raise SyntaxError(f"Invalid token {tokinfo(tok)} when parsing contents of atom {stack[-1]}")
-            elif tok.typ not in stack[-1].allowed_children: # `allowed_children` must be defined by each atom
+            elif tok.typ not in stack[-1].allowed_children:
                 stack[-1].add(tok) # if we aren't allowed to transition on a token we just add the raw token
-            elif tok.typ in [QUOTE1,QUOTE2]:
+            # Now we know tok.typ must be in `allowed_children`
+            elif tok.typ == QUOTE:
                 stack.append(AQuote(tok, isinstance(stack[-1],ASH)))
             elif tok.typ in [SH_LBRACE,SH_LPAREN,SH]:
                 stack.append(ASH(tok))
@@ -1054,15 +1050,12 @@ def atomize(tokenized_lines, interpreter):
     while len(stack) > 1 and isinstance(stack[-1],ACompoundStmt):
         pop()
     if len(stack) > 1:
-        if interpreter:
-            atomize.saved_stack = stack
-            print(stack)
-            return INCOMPLETE
-        else:
+        if error_on_incomplete:
             raise SyntaxError(f"Unclosed {stack[-1].name} expression. Full stack:\n{stack}")
+        print(stack)
+        return IncompleteParseResult(stack)
     stack[0].finish()
     return stack[0]
-atomize.saved_stack = None
 
 
 # Keywords: ^def ^class ^if ^with ^while ^return ^import
@@ -3695,18 +3688,17 @@ INCOMPLETE = -1
 # the main function that run the parser
 # It goes string -> Token list -> Atom list -> Atom list (w MacroAtoms) -> final python code
 # `interpreter` should be True if we're parsing from an interpreter and thus atomize can return INCOMPLETE rather than throwing an error when parens/etc are unclosed
-def parse(lines,globals=None,interpreter=False,debug=False):
+def parse(lines,globals=None,error_on_incomplete=True,debug=False):
     debug = True
     debug = Debug(debug)
     linedatalist = tokenize(lines)
     commentlinedata = [linedata.commenttkns for linedata in linedatalist] # may want for something sometime
     debug.print(f"Tokens: {[linedata.linetkns for linedata in linedatalist]}")
-    masteratom = atomize(linedatalist,interpreter)
+    astmt_list = atomize(linedatalist,error_on_incomplete)
     debug.print(masteratom)
-    if atoms is INCOMPLETE:
+    if isinstance(astmt_list,IncompleteParseResult):
         print("INCOMPLETE")
-        exit(0)
-        return INCOMPLETE
+        return astmt_list
     p = Parser(masteratom.body)
     ast = p.stmts()
     #debug.print(ast)
@@ -3717,6 +3709,10 @@ def parse(lines,globals=None,interpreter=False,debug=False):
     #out = init.run()
     return ast
 ## CAREFUL RELOADING CODEGEN IT WILL RESET THESE VALUES
+
+class IncompleteParseResult:
+    def __init__(self,stack):
+        self.stack = stack
 
 def comment_mods(commentlinedata,ast):
     return ast
