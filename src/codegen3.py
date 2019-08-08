@@ -11,6 +11,10 @@ keywords = set(kwlist)
 
 """
 TODO
+-very exciting project: Making a function that takes a BNF string and outputs a Node class! Effectively lex/yacc but with the ability to randomly drop into python if you dont wanna be constrained by the strings. Make a modified syntax that has BNF embedded in it but ofc names variables and such.
+
+note: simon's idea: have @property.setter update other values like 'prev' or things like that!
+
 -figure out the atoms <-> Parser interface
 -i guess comment out SH related stuff for now then figure it out later
     -Btw what wrong with just having a function sh() that takes a string? Could even be a python class with __call__ so more functionality could be added like sh.err(cmd) sh.background(cmd) etc.
@@ -2013,8 +2017,7 @@ class If(Stmt):
         with p.head():
             p.keyword('if')
             cond = p.expression()
-        with p.body():
-            body =p.stmt_list()
+        body = p.simple_body()
         def elif_fn():
             with p.head():
                 if not p.or_false.keyword('elif'):
@@ -2413,7 +2416,7 @@ class Assignment(Stmt):
         def target_lists():
             p.target_list()
             p.token('=')
-        targets = p.list(target_list,nonempty=True)
+        targets = p.list(target_lists,nonempty=True)
         val = p.logical_xor(p.starred_expression,lambda:p.build_node(YieldExpression))
         return Assignment(targets,val)
 
