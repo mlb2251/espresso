@@ -1,0 +1,86 @@
+Expr:
+    AttributeRef(val:Expr,attr:str)
+    AwaitExpr(val:Expr)
+    Binop(lhs:Expr,op:Op,rhs:Expr)
+    Call(func:str,args:Args)
+    Comparison(vals:[Expr],ops:[CmpOp])
+    Comprehension(expr:Expr,comp_for:CompFor)
+    DictComprehension(k:Expr,v:Expr,comp_for:CompFor)
+    DictDisplay(body:([KVPair|DStarred]|DictComprehension))
+    GeneratorExpr(expr:Expr,comp_For:CompFor)
+    Lambda(args:Params,body:Expr)
+    ListDisplay(body:([Expr|Starred]|Comprehension))
+    Literal:
+        IntLit(val:int)
+        BoolLit(val:bool)
+        NoneLit
+        FloatLit(val:float)
+        StrLit(val:str)
+    SetDisplay(body:([Expr|Starred]|Comprehension))
+    Subscription(val:Expr,key:Expr)
+    Ternary(cond:Expr,if_val:Expr,else_val:Expr)
+    Tuple(vals:[Expr|Starred])
+    Unop(op:Op,rhs:Expr)
+    Yield(val:Expr,has_from:bool)
+
+SimpleStmt:
+    AnnAsn(target:Target,type:Expr,val:(Expr|None))
+    Asn(targets:[Target],val:Expr) # targets[0] = targets[1] = val
+    Assert(val:Expr,msg:Expr)
+    AugAsn(target:Target,op:Op,val:Expr)
+    Break
+    Continue
+    Del(target:Target)
+    ExprStmt(val:Expr)
+    Future(imports:[str|Alias])
+    Global(names:[str])
+    Import(mods:[ModulePath|Alias])
+    FromImport(mod:ModulePath,names:([str|Alias]|Starred))
+    Nonlocal(names:[str])
+    Pass
+    Return(val:Expr)
+    Raise(exc:(Expr|None),from_exc:(Expr|None))
+
+Aux:
+    Alias(val:object,name:str)
+    Args(vals:[Expr|Starred|DStarred|KVPair]) # Note it could be a list of KVPairs Starred stuff etc too.
+    CompFor(targets:Target,iter:Expr,more:(CompFor|CompIf|None)),async:bool)
+    CompIf(cond:Expr,more:(CompFor|CompIf|None))
+    DStarred(val:Expr)
+    KVPair(k:object,v:object)
+    # Note a ModulePath can point to a non-module or a module for example x.y where `y` may be a submodule or just some other identifier.
+    ModulePath(names:[str],leading_dots:int) # import x.y -> (['x','y'],0) and from ..x -> (['x'],2)
+    Params(vals:[KVPair|Starred|DStarred|identifier])
+    Slice(lower:(Expr|None),upper:(Expr|None),stride:(Expr|None))
+    Starred(val:Expr) # Note that Starred things modify the enclosure they're in, so they arent themselves expressions
+    Target(v:(str|Expr|Starred|[Target]))
+
+Op:
+    Add
+    BitAnd
+    BitOr
+    BitXor
+    Div
+    Exp
+    FloorDiv
+    Invert
+    ShiftL
+    ShiftR
+    MatMul
+    Mod
+    Mul
+    Sub
+
+CmpOp:
+    EQ
+    IN
+    IS
+    ISNOT
+    GEQ
+    GT
+    LEQ
+    LT
+    NEQ
+    NOTIN
+
+

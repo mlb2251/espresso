@@ -105,6 +105,109 @@ Don't worry .identify is always called with peek(), you dont need to manage that
 
 
 
+===
+
+The BNF -> class function
+
+conditional_expression ::= or_test ["if" or_test "else" expression]
+lambda_expr        ::=  "lambda" [parameter_list] ":" expression
+
+dict_display       ::=  "{" [key_datum_list | dict_comprehension] "}"
+key_datum_list     ::=  key_datum ("," key_datum)* [","]
+key_datum          ::=  expression ":" expression | "**" or_expr
+dict_comprehension ::=  expression ":" expression comp_for
+
+
+comma_list(x) ::= x ["," x]* [","]
+
+
+dict_display       ::=  "{" [key_datum_list | dict_comprehension] "}"
+key_datum_list     ::=  [comma_list(key_datum)]
+key_datum          ::=  expression ":" expression | "**" or_expr
+dict_comprehension ::=  k:expression ":" v:expression cf:comp_for
+    -> KVPair(k,v)
+
+
+## *.ast code ##
+
+
+
+Expr: # <- indicates superclass, defined elsewhere (perhaps by ```), else defaults to `class Expr:pass`.
+    | Comprehension(Expr,CompFor)
+    | Binop(Expr,Op,Expr) # <- types (/superclasses) are included here
+    | Something(object) # <- `object` is super of any value.
+    | Literal: # <- nesting
+        | IntLit(int)
+        | BoolLit(bool)
+        | ...
+    | SomeArglessThing
+    | DictDisplay( # <- not sure if should be allowed
+        | DictComprehension
+        | (DoubleStarred(Expr)|KVPair) list
+        )
+    | ...
+
+Op: Add | Sub | Mul | Div | ...
+
+
+
+
+## generated code ##
+class Comprehension(Expr):
+    def __init__(self,expr,comp_for):
+        super().__init__()
+        self.expr = expr
+        self.comp_for = comp_for
+
+## alternate *.ast code ##
+``` # <- notice this python literal code block marker
+class Comprehension(Expr):
+    def __init__(self,expr,comp_for):
+        super().__init__()
+        self.expr = expr
+        self.comp_for = comp_for
+```
+
+
+## *.parser ##
+
+# newlines needed bc "|" confuses otherwise -- for *.parser at least
+# we translate argument_list -> ArgumentList etc
+# ":" is tightest binding
+
+Expr:
+    | func:Expr "(" args:ArgumentList ")" -> Call(func, args)
+    | conditional_expression ::= or_test ["if" or_test "else" expression]
+
+
+call ::= func:Expr "(" args:ArgumentList ")" -> Call(func, args)
+conditional_expression ::= if_val:or_test ["if" cond:or_test "else" else_val:expression] -> Ternary(cond,if_val,else_val)
+
+dict_display       ::=  "{" v:[key_datum_list | dict_comprehension] "}" -> DictDisplay(v)
+
+# macro/bnf fn
+# note [... v2:x]* assigns v2 to a list of the vlaues it takes inside. If v2 lives in a branch then this value may sometimes be None
+comma_list(x) ::= v1:x ["," v2:x]* [","] -> [v1] + v2
+key_datum_list     ::=  comma_list(key_datum)
+key_datum          ::=
+    | k:expression ":" v:expression -> KVPair(k,v)
+    | "**" v:or_expr -> DoubleStarred(v)
+dict_comprehension ::=  k:expression ":" v:expression cf:comp_for -> DictComprehension(KVPair(k,v),comp_for)
+
+
+
+
+
+
+
+
+
+===
+
+
+
+
+
 It's important not to keep any state that needs to potentially be rewound in the Atoms or Tokens during Parser action. All that should be in the Parser and save_state/load_state should caputre it.
 
 
@@ -2881,6 +2984,7 @@ class DictComprehension(Expr):
         p.token(':')
         val = p.expression()
         kv = KVPair(key,val)
+        comp_for = p.comp_for()
         return DictComprehension(kv_pair,comp_for)
 
 

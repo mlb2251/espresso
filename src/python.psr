@@ -1,0 +1,399 @@
+# note that sometimes things are ordered within a bnf list of productions so you shouldnt optimize. Maybe have a special flag for optimizing a bnf and just do it for stuff where order doesnt matter (ie xor situations) like simple_stmt
+
+_COMMA_LIST(x) ::=
+    v1:x ("," v2:x)* -> [v1,*v2]
+COMMA_LIST_NONEMPTY(x) ::=
+    v:_COMMA_LIST(x) [","] -> v
+COMMA_LIST_NONEMPTY_HASCOMMA(x) ::= # has at least one comma
+    v1:x "," v2:_COMMA_LIST(x) -> [v1,*v2]
+    v1:x "," -> [v1]
+
+COMMA_LIST_NONEMPTY_NOTRAILING(x) ::=
+    _COMMA_LIST(x)
+STARRED(x) ::=
+    "*" v:x -> Starred(v)
+DSTARRED(x) ::=
+    "**" v:x -> DStarred(v)
+
+OR_ALIAS(x) ::=
+    v:x "as" name:identifier -> Alias(v,name)
+    x
+
+@unordered
+atom ::=
+    identifier | literal | enclosure
+
+@unordered
+enclosure ::=
+    parenth_form | list_display | dict_display | set_display | generator_expression | yield_atom
+
+@unordered
+literal ::=
+    stringliteral | bytesliteral | integer | floatnumber | imagnumber
+
+parenth_form ::=
+    "(" ")" -> Tuple([]) # an empty tuple is defined by its parens
+    "(" v:starred_expression ")" -> v
+
+comprehension ::=
+    e:expression cf:comp_for -> Comprehension(e,cf)
+comp_for ::=
+    async:["async"] "for" targets:target_list "in" iter:or_test [more:comp_iter] -> CompFor(targets,iter,more,async)
+comp_iter ::=
+    comp_for | comp_if
+comp_if ::=
+    "if" cond:expression_nocond [more:comp_iter] -> CompIf(cond,more)
+
+list_display ::=
+    "[" "]" -> ListDisplay([])
+    "[" v:(starred_list | comprehension) "]" -> ListDisplay(v)
+set_display ::=
+    "{" v:(starred_list | comprehension) "}" -> SetDisplay(v)
+
+dict_display ::=
+    "{" "}" -> DictDisplay([])
+    "{" v:(key_datum_list | dict_comprehension) "}" -> DictDisplay(v)
+key_datum_list ::=
+    COMMA_LIST_NONEMPTY(key_datum)
+key_datum ::=
+    k:expression ":" v:expression -> KVPair(k,v)
+    DSTARRED(or_expr)
+dict_comprehension ::=
+    k:expression ":" v:expression cf:comp_for -> DictComprehension(k,v,cf)
+
+generator_expression ::=
+    "(" e:expression cf:comp_for ")" -> GeneratorExpr(e,cf)
+
+yield_atom ::=
+    "(" v:yield_expression ")" -> v
+yield_expression ::=
+    "yield" "from" v:expression -> Yield(v,True)
+    "yield" v:expression_list -> Yield(v,False)
+
+@unordered
+primary ::=
+    atom | attributeref | sub_or_slicing | call
+attributeref ::=
+    val:primary "." attr:identifier -> AttributeRef(val,attr)
+
+
+# note that if there are no proper slices in the slice list then it's a subscription. We handle this by simply parsing subscription before slicing
+sub_or_slicing ::= # ordered!
+    subscription | slicing
+
+subscription ::= # note the expression_list evals to a single expression
+    val:primary "[" idx:expression_list "]" -> Subscription(val,idx)
+slicing ::=
+    primary "[" slice_list "]"
+slice_list ::=
+    COMMA_LIST_NONEMPTY(slice_item)
+slice_item ::=
+    expression | proper_slice
+proper_slice ::=
+    [lower:expression] ":" [upper:expression] [ ":" [stride:expression] ] -> Slice(lower,upper,stride)
+
+
+# note any names in [] (ie optional things) or names in branches not taken will be given the value None
+# note that any names anywhere inside a "+"d or "*"d block are lists of values, and if there is cond branch inside a "*" so a value isnt assigned then it becomes None for that iteration in the list. Meaning the list always ends up the same length.
+
+#
+# (x:a | x:b) means x will get one value or the other depending on the branch. If a branch doesnt have x than x becomes None
+# (x:a | x:b)* means x is a list of length equal to the number of left branches taken plus number of right branches taken.
+#
+
+# here i separate into two separate lines so that `args` defaulting to "[]" can be done easily
+call ::=
+    func:primary "(" ")" -> Call(func,Args([]))
+    func:primary "(" arg0:comprehension ")" -> Call(func,Args([arg0]))
+    func:primary "(" args:argument_list [","] ")" -> Call(func,args)
+
+argument_list ::=
+    a:positional_arguments ["," b:starred_and_keywords] ["," c:keywords_arguments] -> Args([*a,*b,*c])
+    b:starred_and_keywords  ["," c:keywords_arguments] -> Args([*b,*c])
+    c:keywords_arguments -> Args(c)
+
+# macros/fns can take things directly as args like so...
+positional_arguments ::=
+    COMMA_LIST_NONEMPTY_NOTRAILING(STARRED(expression) | expression)
+starred_and_keywords ::=
+    COMMA_LIST_NONEMPTY_NOTRAILING(STARRED(expression) | keyword_item)
+keywords_arguments ::=
+    COMMA_LIST_NONEMPTY_NOTRAILING(DSTARRED(expression) | keyword_item)
+keyword_item ::=
+    k:identifier "=" v:expression -> KVPair(k,v)
+
+# notice how every blue bnf must evaluate to some sort of Py expression which may or may not be used
+# btw the rhs after "->" is arbitrary python
+
+await_expr ::=
+    "await" v:primary -> AwaitExpr(v)
+
+power(await_expr,primary) ::=
+    lhs:(await_expr|primary) "**" rhs:u_expr -> Binop(lhs,Exp,rhs)
+
+@unordered
+u_expr(power) ::=
+    "-" rhs:u_expr -> Unop(Sub,rhs)
+    "+" rhs:u_expr -> Unop(Add,rhs)
+    "~" rhs:u_expr -> Unop(Invert,rhs)
+    "~" "test" rhs:u_expr -> Unop(Invert,rhs)
+
+@unordered
+m_expr(u_expr) ::=
+    lhs:m_expr "*" rhs:u_expr -> Binop(lhs,Mul,rhs)
+    lhs:m_expr "@" rhs:m_expr -> Binop(lhs,MatMul,rhs)
+    lhs:m_expr "//" rhs:u_expr -> Binop(lhs,FloorDiv,rhs)
+    lhs:m_expr "/" rhs:u_expr -> Binop(lhs,Div,rhs)
+    lhs:m_expr "%" rhs:u_expr -> Binop(lhs,Mod,rhs)
+
+@unordered
+a_expr(m_expr) ::=
+    lhs:a_expr "+" rhs:m_expr -> Binop(lhs,Add,rhs)
+    lhs:a_expr "-" rhs:m_expr -> Binop(lhs,Sub,rhs)
+
+@unordered
+shift_expr(a_expr) ::=
+    lhs:shift_expr "<<" rhs:a_expr -> Binop(lhs,ShiftL,rhs)
+    lhs:shift_expr ">>" rhs:a_expr -> Binop(lhs,ShiftR,rhs)
+
+and_expr(shift_expr) ::=
+    lhs:and_expr "&" rhs:shift_expr -> Binop(lhs,BitAnd,rhs)
+xor_expr(and_expr) ::=
+    lhs:xor_expr "^" rhs:and_expr -> Binop(lhs,BitXor,rhs)
+or_expr(xor_expr) ::=
+    lhs:or_expr "|" rhs:xor_expr -> Binop(lhs,BitOr,rhs)
+
+comparison(or_expr) ::=
+    v1:or_expr (v2:op_and_val)+ -> Comparison([v1,*[tup[0] for tup in v2]],[tup[1] for tup in v2])
+
+@unordered
+#@quickcheck(lambda line: any([line.startswith(op) for op in ["<",">","==",">=","<=","!=","is","in","not"]]))
+op_and_val ::=
+    op:cmpop v:or_expr -> op,v
+
+@unordered
+cmpop ::=
+    "<" -> LT
+    ">" -> GT
+    "==" -> EQ
+    ">=" -> GEQ
+    "<=" -> LEQ
+    "!=" -> NEQ
+    "is" "not" -> ISNOT
+    "is" -> IS
+    "not in" -> NOTIN
+    "in" -> IN
+
+
+conditional_expression(or_test) ::=
+    if_val:or_test "if" cond:or_test "else" else_val:expression -> Ternary(cond,if_val,else_val)
+expression(conditional_expression) ::=
+    lambda_expr
+expression_nocond(or_test) ::=
+    lambda_expr_nocond
+
+lambda_expr ::=
+    "lambda" ":" body:expression -> Lambda(Params([]),body)
+    "lambda" params:parameter_list ":" body:expression -> Lambda(params,body)
+lambda_expr_nocond ::=
+    "lambda" ":" body:expression_nocond -> Lambda(Params([]),body)
+    "lambda" params:parameter_list ":" body:expression_nocond -> Lambda(params,body)
+
+expression_list ::=
+    v:COMMA_LIST_NONEMPTY_HASCOMMA(expression) -> Tuple(v)
+    expression
+starred_list ::= # used in places where you don't want to eval the list into a Tuple you just want to keep it as a list
+    COMMA_LIST_NONEMPTY(starred_item)
+# I disagree with the official BNF for starred_expression, which accepts the empty string as valid. This would imply that you could do assignment to the empty string which is not allowed, so clearly starred_expression should be a NONEMPTY list not allowing for emptiness.
+starred_expression(expression) ::= # returns an Expr (may be a Tuple)
+    v:COMMA_LIST_NONEMPTY_HASCOMMA(starred_item) -> Tuple(v)
+    starred_item # no comma. must come after hascomma version!
+starred_item ::=
+    expression | STARRED(or_expr)
+
+
+@unordered
+simple_stmt ::=
+    assert_stmt
+    augmented_assignment_stmt
+    annotated_assignment_stmt
+    pass_stmt
+    del_stmt
+    return_stmt
+    yield_stmt
+    raise_stmt
+    break_stmt
+    continue_stmt
+    import_stmt
+    future_stmt
+    global_stmt
+    nonlocal_stmt
+    assignment_stmt
+    expression_stmt
+
+
+expression_stmt ::=
+    v:starred_expression -> ExprStmt(v)
+
+assignment_stmt ::=
+    (target_lists:target_list "=")+ val:(starred_expression | yield_expression) -> Asn(target_lists,val)
+target_list ::= # since Targets can old target_lists internally we might as well make the overall target list a single Target
+    v:COMMA_LIST_NONEMPTY(target) -> Target(v)
+
+@unordered
+target ::=
+    v:identifier -> Target(v)
+    "(" ")" -> Target([]) # empty target list -- note "() = ()" is valid code, despite doing nothing.
+    "[" "]" -> Target([]) # empty target list
+    "(" v:target_list ")" -> v # target_list yields a Target
+    "[" v:target_list "]" -> v
+    v:attributeref -> Target(v)
+    v:subscription -> Target(v)
+    v:slicing -> Target(v)
+    v:STARRED(target) -> Target(v)
+
+augmented_assignment_stmt ::=
+    tar:augtarget op:augop val:(expression_list | yield_expression) -> AugAsn(tar,op,val)
+@unordered
+augtarget ::=
+    v:identifier -> Target(v)
+    v:attributeref -> Target(v)
+    v:sub_or_slicing -> Target(v)
+augop ::=
+    NO_TRAILING_WS(v:augop_noeq) "=" -> v
+@unordered
+augop_noeq ::=
+    "+" -> Add
+    "-" -> Sub
+    "*" -> Mul
+    "@" -> MatMul
+    "/" -> Div
+    "//" -> FloorDiv
+    "%" -> Mod
+    "**" -> Exp
+    ">>" -> ShiftR
+    "<<" -> ShiftL
+    "&" -> BitAnd
+    "^" -> BitXor
+    "|"-> BitOr
+
+annotated_assignment_stmt ::=
+    tar:augtarget ":" typ:expression ["=" val:expression] -> AugAsn(tar,typ,val)
+
+assert_stmt ::= 
+    "assert" v:expression ["," msg:expression] -> Assert(v,msg)
+
+pass_stmt ::= 
+    "pass" -> Pass()
+
+del_stmt ::=  
+    "del" v:target_list -> Del(v)
+
+return_stmt ::= 
+    "return" v:expression_list -> Return(v)
+    "return" -> Return(NoneLit())
+
+yield_stmt ::=
+    v:yield_expression -> ExprStmt(v)
+
+raise_stmt ::=  
+    "raise" [v1:expression ["from" v2:expression]] -> Raise(v1,v2)
+
+break_stmt ::=  
+    "break" -> Break()
+
+continue_stmt ::=  
+    "continue" -> Continue
+
+import_stmt ::=  
+    "import" mods:COMMA_LIST_NONEMPTY_NOTRAILING(OR_ALIAS(module)) -> Import(mods)
+    "from" mod:relative_module "import" names:COMMA_LIST_NONEMPTY_NOTRAILING(str_or_alias) -> FromImport(mod,names)
+    "from" mod:relative_module "import" "(" names:COMMA_LIST_NONEMPTY(str_or_alias) ")" -> FromImport(mod,names)
+    "from" mod:module "import" "*" -> FromImport(mod,Starred(NoneLit()))
+
+module ::=
+    NO_TRAILING_WS((v1:identifier ".")*) v2:identifier -> ModulePath([*v1,v2],0)
+relative_module ::=
+    NO_TRAILING_WS((dots:".")*) mod:module -> ModulePath(mod.names,len(dots)) # 
+    NO_TRAILING_WS((dots:".")*) "." -> ModulePath("",len(dots)+1)
+
+future_stmt ::= 
+    "from" "__future__" "import" v:COMMA_LIST_NONEMPTY_NOTRAILING(str_or_alias) -> Future(v)
+    "from" "__future__" "import" "(" v:COMMA_LIST_NONEMPTY(str_or_alias) ")" -> Future(v)
+
+str_or_alias ::=
+    OR_ALIAS(identifier)
+
+global_stmt ::=
+    "global" v:COMMA_LIST_NONEMPTY(identifier) -> Global(v)
+
+nonlocal_stmt ::=
+    "nonlocal" v:COMMA_LIST_NONEMPTY(identifier) -> Nonlocal(v)
+
+
+@unordered
+compound_stmt ::=
+    if_stmt
+    while_stmt
+    for_stmt
+    try_stmt
+    with_stmt
+    funcdef
+    classdef
+    async_with_stmt
+    async_for_stmt
+    async_funcdef
+
+suite         ::=
+    stmt_list NEWLINE | NEWLINE INDENT statement+ DEDENT
+statement     ::=
+    stmt_list NEWLINE | compound_stmt
+stmt_list     ::=
+    simple_stmt (";" simple_stmt)* [";"]
+
+if_stmt ::=  "if" expression ":" suite
+             ("elif" expression ":" suite)*
+             ["else" ":" suite]
+
+while_stmt ::=  "while" expression ":" suite
+                ["else" ":" suite]
+
+for_stmt ::=  "for" target_list "in" expression_list ":" suite
+              ["else" ":" suite]
+
+try_stmt  ::=  try1_stmt | try2_stmt
+try1_stmt ::=  "try" ":" suite
+               ("except" [expression ["as" identifier]] ":" suite)+
+               ["else" ":" suite]
+               ["finally" ":" suite]
+try2_stmt ::=  "try" ":" suite
+               "finally" ":" suite
+
+with_stmt ::=  "with" with_item ("," with_item)* ":" suite
+with_item ::=  expression ["as" target]
+
+funcdef                 ::=  [decorators] "def" funcname "(" [parameter_list] ")"
+                             ["->" expression] ":" suite
+decorators              ::=  decorator+
+decorator               ::=  "@" dotted_name ["(" [argument_list [","]] ")"] NEWLINE
+dotted_name             ::=  identifier ("." identifier)*
+parameter_list          ::=  defparameter ("," defparameter)* ["," [parameter_list_starargs]]
+                             | parameter_list_starargs
+parameter_list_starargs ::=  "*" [parameter] ("," defparameter)* ["," ["**" parameter [","]]]
+                             | "**" parameter [","]
+parameter               ::=  identifier [":" expression]
+defparameter            ::=  parameter ["=" expression]
+funcname                ::=  identifier
+
+classdef    ::=  [decorators] "class" classname [inheritance] ":" suite
+inheritance ::=  "(" [argument_list] ")"
+classname   ::=  identifier
+
+async_funcdef ::=  [decorators] "async" "def" funcname "(" [parameter_list] ")"
+                   ["->" expression] ":" suite
+
+async_for_stmt ::=  "async" for_stmt
+
+async_with_stmt ::=  "async" with_stmt
+
+
