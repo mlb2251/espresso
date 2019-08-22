@@ -15,6 +15,7 @@ Expr:
         ComplexLit(val:complex)
         IntLit(val:int)
         NoneLit
+        EllipsisLit
         StrLit(val:str)
     SetDisplay(body:([Expr|Starred]|Comprehension))
     Subscription(val:Expr,key:Expr)

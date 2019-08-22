@@ -1,3 +1,8 @@
+### https://docs.python.org/3/reference/lexical_analysis.html#literals
+### ^^^ work through this from top to bottom is the next step do it. it's important. once it's done everything will work nicely. encodings and all.
+
+
+
 # note that sometimes things are ordered within a bnf list of productions so you shouldnt optimize. Maybe have a special flag for optimizing a bnf and just do it for stuff where order doesnt matter (ie xor situations) like simple_stmt
 
 _COMMA_LIST(x) ::=
@@ -38,10 +43,10 @@ atom ::=
 enclosure ::=
     parenth_form | list_display | dict_display | set_display | generator_expression | yield_atom
 
-# DEVIATION: added boolliteral and noneliteral
+# DEVIATION: added boolliteral and noneliteral and ellipsisliteral
 @unordered
 literal ::=
-    REGEX(stringliteral) | REGEX(bytesliteral) | REGEX(integer) | REGEX(floatnumber) | REGEX(imagnumber) | boolliteral | noneliteral
+    REGEX(stringliteral) | REGEX(bytesliteral) | REGEX(integer) | REGEX(floatnumber) | REGEX(imagnumber) | boolliteral | noneliteral | ellipsisliteral
 
 
 # for speed all these could be combined into one big regex if you wanted to. Prob minimal difference and less readable though
@@ -128,6 +133,8 @@ boolliteral ::=
     "False" -> BoolLit(False)
 noneliteral ::=
     "None" -> NoneLit # "None" is a keyword in python
+ellipsisliteral ::=
+    "." "." "." -> EllipsisLit
 
 
 parenth_form ::=
