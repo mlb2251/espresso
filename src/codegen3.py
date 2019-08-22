@@ -503,29 +503,67 @@ class Parser():
         if self.idx-1 >= len(self.astmt):
             raise SyntaxError("Ran out of astmt to consume")
         return self.astmt[self.idx-1]
-    def comma_list(self,*fns,nonempty=False,as_expr=False,allow_trailing_comma=True):
+    def once(self,fn):
+        """
+        A decorator (often manually called on an instance of a function) that returns a new function that will raise a SyntaxError on the second time it's called
+        """
+        called = False
+        def wrapper(*args,**kwargs):
+            nonlocal called
+            if called:
+                raise SyntaxError
+            called = True
+            return fn(*args,**kwargs)
+    @contextmanager
+    def maybe_cm(fn,bool):
+        """
+        Maybe call a fn that returns a contextmanager, depending on a boolean
+        with p.maybe_cm(p.parens,use_parens):
+            ...
+        """
+        if bool == True:
+            return fn()
+        yield None # do nothing
+
+    def comma_list(self,*fns,nonempty=False,as_expr=False,allow_trailing_comma=True,ordered=False):
         """
         Decorator that calls fn() in a loop and returns a list of the results. List is empty if first call fails.
         as_expr means the list will be turned into a Tuple, or else a non-tuple value if its a list of length 1 that didn't end in a comma
+        ordered means that as soon as fn[2] succeeds then fn[0] and fn[1] will never be attempted again. As usual fn[0] is always tried before fn[1] until this happens.
+        Use ordered with p.once to include fns that should only be allowed to fire once.
         """
         ret = []
         while True:
-            try:
-                ret.append(self.logical_xor(*fns))
-                if not self.or_false.token(','):
+            if ordered:
+                try:
+                    ret.append(fns[0])
+                except SyntaxError:
+                    fns = fns[1:] # never try the failed fn again
+                    if fns == []:
+                        break
+                    continue
+            else:
+                try:
+                    ret.append(self.logical_xor(*fns))
+                except SyntaxError:
                     break
-            except SyntaxError:
+
+            if not self.or_false.token(','):
                 break
         if nonempty and len(ret) == 0:
             raise SyntaxError
         if not allow_trailing_comma and self.prev.data == ',':
             raise SyntaxError
-        if as_expr:
-            if len(ret) == 1 and self.prev.dat != ',':
-                return body[0] # eval to the single expression in the list
-            return Tuple(body)
+#        if as_expr:
+#            if len(ret) == 1 and self.prev.dat != ',':
+#                return body[0] # eval to the single expression in the list
+#            return Tuple(body)
 
         return ret
+    def comma_chain(*fns):
+        """
+        Takes functions and calls each fn with comma_list(nonempty=False,allow_trailing_comma=False)
+        """
     def list(self,*fns,nonempty=False):
         """
         Decorator that calls fn() in a loop and returns a list of the results. List is empty if first call fails.

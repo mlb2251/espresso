@@ -1,20 +1,20 @@
 Expr:
-    AttributeRef(val:Expr,attr:str)
-    AwaitExpr(val:Expr)
-    Binop(lhs:Expr,op:Op,rhs:Expr)
-    Call(func:str,args:Args)
-    Comparison(vals:[Expr],ops:[CmpOp])
-    Comprehension(expr:Expr,comp_for:CompFor)
-    DictComprehension(k:Expr,v:Expr,comp_for:CompFor)
-    DictDisplay(body:([KVPair|DStarred]|DictComprehension))
-    GeneratorExpr(expr:Expr,comp_For:CompFor)
-    Lambda(args:Params,body:Expr)
-    ListDisplay(body:([Expr|Starred]|Comprehension))
+    Attr(val:Expr,attr:str) # x.y
+    AwaitExpr(val:Expr) # await fn()
+    Binop(lhs:Expr,op:Op,rhs:Expr) # x + y
+    Call(func:str,args:Args) # fn(x,y)
+    Comparison(vals:[Expr],ops:[CmpOp]) # x < y == z
+    DictDisplay(body:([KVPair|DStarred]|DictComprehension)) # {**w,x,**y,z} | {k:v for k,v in tuple_list}
+    GeneratorExpr(expr:Expr,comp_For:CompFor) # (x*2 for x in y)
+    Lambda(args:Params,body:Expr) # lambda x: y
+    ListDisplay(body:([Expr|Starred]|Comprehension)) # [x,y,z] | [x*2 for x in y]
     Literal:
-        IntLit(val:int)
         BoolLit(val:bool)
-        NoneLit
+        BytesLit(val:bool)
         FloatLit(val:float)
+        ComplexLit(val:complex)
+        IntLit(val:int)
+        NoneLit
         StrLit(val:str)
     SetDisplay(body:([Expr|Starred]|Comprehension))
     Subscription(val:Expr,key:Expr)
@@ -23,37 +23,53 @@ Expr:
     Unop(op:Op,rhs:Expr)
     Yield(val:Expr,has_from:bool)
 
-SimpleStmt:
-    AnnAsn(target:Target,type:Expr,val:(Expr|None))
-    Asn(targets:[Target],val:Expr) # targets[0] = targets[1] = val
-    Assert(val:Expr,msg:Expr)
-    AugAsn(target:Target,op:Op,val:Expr)
-    Break
-    Continue
-    Del(target:Target)
-    ExprStmt(val:Expr)
-    Future(imports:[str|Alias])
-    Global(names:[str])
-    Import(mods:[ModulePath|Alias])
-    FromImport(mod:ModulePath,names:([str|Alias]|Starred))
-    Nonlocal(names:[str])
-    Pass
-    Return(val:Expr)
-    Raise(exc:(Expr|None),from_exc:(Expr|None))
+Stmt:
+    SimpleStmt:
+        AnnAsn(target:Annotated,val:Expr?) # Annotated(val:Target,type:Expr)
+        Asn(targets:[Target],val:Expr) # targets[0] = targets[1] = val
+        Assert(val:Expr,msg:Expr)
+        AugAsn(target:Target,op:Op,val:Expr)
+        Break
+        Continue
+        Del(target:Target)
+        ExprStmt(val:Expr)
+        Future(imports:[str|Alias])
+        Global(names:[str])
+        Import(mods:[ModulePath|Alias])
+        FromImport(mod:ModulePath,names:([str|Alias]|Starred))
+        Nonlocal(names:[str])
+        Pass
+        Return(val:Expr)
+        Raise(exc:(Expr|None),from_exc:Expr?)
+    CompoundStmt:
+        ClassDef(cname:str,body:Suite,inheritance:Args?,decos:[Decorator]?)
+        For(target:Target,iter:Expr,body:Suite,else_body:Suite?,is_async:bool)
+        FuncDef(fname:str,params:Params,body:Suite,decos:[Decorator]?,is_async:bool,return_ann:Expr?)
+        If(cond:Expr,body:Suite,elif_conds:[Expr],elif_bodies:[Suite],else_body:Suite?)
+        Try(body:Suite,excs:[Expr?],except_bodies:[Suite],else_body:Suite?,finally_body:Suite?)
+        While(cond:Expr,body:Suite,else_body:Suite?)
+        With(withitems:[WithItem],body:Suite,is_async:bool)
 
 Aux:
     Alias(val:object,name:str)
     Args(vals:[Expr|Starred|DStarred|KVPair]) # Note it could be a list of KVPairs Starred stuff etc too.
-    CompFor(targets:Target,iter:Expr,more:(CompFor|CompIf|None)),async:bool)
+    CompFor(targets:Target,iter:Expr,more:(CompFor|CompIf|None)),is_async:bool)
     CompIf(cond:Expr,more:(CompFor|CompIf|None))
-    DStarred(val:Expr)
+    Comprehension(expr:Expr,comp_for:CompFor) # x*2 for x in y
+    DictComprehension(k:Expr,v:Expr,comp_for:CompFor) # k:v for k,v in some_dict.items()
+    DStarred(val:object)
+    Decorator(val:(Attr|str),args:Args?) ## 
     KVPair(k:object,v:object)
+    Annotated(val:object,type:Expr?)
     # Note a ModulePath can point to a non-module or a module for example x.y where `y` may be a submodule or just some other identifier.
     ModulePath(names:[str],leading_dots:int) # import x.y -> (['x','y'],0) and from ..x -> (['x'],2)
     Params(vals:[KVPair|Starred|DStarred|identifier])
     Slice(lower:(Expr|None),upper:(Expr|None),stride:(Expr|None))
-    Starred(val:Expr) # Note that Starred things modify the enclosure they're in, so they arent themselves expressions
-    Target(v:(str|Expr|Starred|[Target]))
+    Starred(val:object) # Note that Starred things modify the enclosure they're in, so they arent themselves expressions
+    Target(val:(str|Expr|Starred|[Target]))
+    WithItem(val:Expr,target:(Target|None))
+    SimpleChain(stmts:[SimpleStmt])
+    Suite(stmts:(SimpleChain|[CompoundStmt|SimpleChain])) # "def foo: a;b;c" -> SimpleChain whereas using indent syntax you get the righthand branch
 
 Op:
     Add

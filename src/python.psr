@@ -4,12 +4,18 @@ _COMMA_LIST(x) ::=
     v1:x ("," v2:x)* -> [v1,*v2]
 COMMA_LIST_NONEMPTY(x) ::=
     v:_COMMA_LIST(x) [","] -> v
+COMMA_LIST_EMPTY(x) ::= # allow empty list ie consume nothing and yield []
+    COMMA_LIST_NONEMPTY(x)
+    pass -> []
 COMMA_LIST_NONEMPTY_HASCOMMA(x) ::= # has at least one comma
     v1:x "," v2:_COMMA_LIST(x) -> [v1,*v2]
     v1:x "," -> [v1]
 
 COMMA_LIST_NONEMPTY_NOTRAILING(x) ::=
     _COMMA_LIST(x)
+COMMA_LIST_EMPTY_NOTRAILING(x) ::= # allow empty list ie consume nothing and yield []
+    _COMMA_LIST(x)
+    pass -> []
 STARRED(x) ::=
     "*" v:x -> Starred(v)
 DSTARRED(x) ::=
@@ -19,17 +25,110 @@ OR_ALIAS(x) ::=
     v:x "as" name:identifier -> Alias(v,name)
     x
 
+dotted_name ::= # yields [str]
+    NO_TRAILING_WS((v1:identifier ".")*) v2:identifier -> [*v1,v2]
+
 @unordered
 atom ::=
     identifier | literal | enclosure
+
+# "identifier ::=" definition is a pdef inside of Parser
 
 @unordered
 enclosure ::=
     parenth_form | list_display | dict_display | set_display | generator_expression | yield_atom
 
+# DEVIATION: added boolliteral and noneliteral
 @unordered
 literal ::=
-    stringliteral | bytesliteral | integer | floatnumber | imagnumber
+    REGEX(stringliteral) | REGEX(bytesliteral) | REGEX(integer) | REGEX(floatnumber) | REGEX(imagnumber) | boolliteral | noneliteral
+
+
+# for speed all these could be combined into one big regex if you wanted to. Prob minimal difference and less readable though
+integer = "({decinteger}|{bininteger}|{octinteger}|{hexinteger})"
+decinteger = "(([1-9](_?\d)+)|(0+(_?0)*))"
+    #nonzerodigit (["_"] digit)* | "0"+ (["_"] "0")*
+bininteger = "(0(b|B)(_?(0|1))+)"
+    #"0" ("b" | "B") (["_"] bindigit)+
+octinteger = "(0(o|O)(_?[0-7])+)"
+    #"0" ("o" | "O") (["_"] octdigit)+
+hexinteger = "(0(x|X)(_?[0-9a-fA-F])+)"
+    #"0" ("x" | "X") (["_"] hexdigit)+
+
+floatnumber = "({pointfloat}|{exponentfloat})"
+pointfloat = "(({digitpart}?{fraction})|({digitpart}\.))"
+exponentfloat = "(({digitpart}|{pointfloat}){exponent})"
+digitpart = "(\d(_?\d)*)"
+fraction = "\.{digitpart}"
+exponent = "((e|E)(+|-)?{digitpart})"
+
+imagnumber = "(({floatnumber}|{digitpart})(j|J))"
+
+# Note we assume all strings are in 'raw' mode since thats how theyll be read during f.read() of *.psr. So '\\.' is the same as r'\\.' meaning match the backslash then match any character
+stringliteral =  "({stringprefix}?({shortstring}|{longstring}))"
+quote = "(?P<quotechar>('|\"))"
+triquote = "(?P<quotechar>('''|\"\"\"))"
+stringprefix = "(([rR][fF])|([fF][rR])|[ruRUfF])"
+shortstring =  "({quote}{shortstringitem}*(?P=quotechar))"
+longstring =  "({triquote}longstringitem*(?P=quotechar))"
+shortstringitem = "({shortstringchar}|{stringescapeseq})"
+longstringitem = "({longstringchar}|{stringescapeseq})"
+shortstringchar = "(([^\\\n])(?!(?P=quotechar)))" # ?! is a negative lookahead
+#shortstringchar ::=  <any source character except "\" or newline or the quote>
+longstringchar = "([^\\])"
+#longstringchar ::=  <any source character except "\">
+stringescapeseq = "(\\.)"
+#stringescapeseq ::=  "\" <any source character>
+
+
+bytesliteral =  "({bytesprefix}?({shortbytes}|{longbytes}))"
+bytesprefix = "(([bB][rR])|([rR][bB])|[b])"
+shortbytes =  "({quote}{shortbytesitem}*(?P=quotechar))"
+longbytes =  "({triquote}longbytesitem*(?P=quotechar))"
+shortbytesitem = "({shortbyteschar}|{bytesescapeseq})"
+longbytesitem = "({longbyteschar}|{bytesescapeseq})"
+shortbyteschar = "(([^\\\n])(?!(?P=quotechar)))"
+#shortbyteschar = <any ASCII character except "\" or newline or the quote>
+longbyteschar = "([^\\])"
+#longbyteschar = <any ASCII character except "\">
+bytesescapeseq = "(\\.)"
+#bytesescapeseq = "\" <any ASCII character>
+
+
+
+
+
+
+### https://docs.python.org/3/reference/lexical_analysis.html#literals
+### ^^^ work through this from top to bottom is the next step do it. it's important. once it's done everything will work nicely. encodings and all.
+
+
+
+
+
+
+
+
+
+# DEVIATION modified to include fstring prefix here and not in the normal string
+f_string = "{fstringprefix}{f_string_body}" ## <-- TODO put {quote} stuff there and do triquote stuff etc
+f_string_body = "(({literal_char}|(\{\{)|(\}\})|{replacement_field})*)"
+fstringprefix = "(([rR][fF])|([fF][rR])|[fF])"
+replacement_field = "\{{f_expression}(!{conversion})?(:{format_spec})?\}"
+f_expression = (conditional_expression | "*" or_expr) ("," conditional_expression | "," "*" or_expr)* [","] | yield_expression
+conversion = "([sra])"
+format_spec = (literal_char | NULL | replacement_field)*
+literal_char = "([^\{\}])"
+#literal_char = <any code point except "{", "}" or NULL>
+## i have no idea what NULL means so i ignored it (maybe its a \0)
+## "Python reads program text as Unicode code points"
+
+boolliteral ::=
+    "True" -> BoolLit(True) # "True" is keyword in python
+    "False" -> BoolLit(False)
+noneliteral ::=
+    "None" -> NoneLit # "None" is a keyword in python
+
 
 parenth_form ::=
     "(" ")" -> Tuple([]) # an empty tuple is defined by its parens
@@ -38,7 +137,7 @@ parenth_form ::=
 comprehension ::=
     e:expression cf:comp_for -> Comprehension(e,cf)
 comp_for ::=
-    async:["async"] "for" targets:target_list "in" iter:or_test [more:comp_iter] -> CompFor(targets,iter,more,async)
+    is_async:["async"] "for" targets:target_list "in" iter:or_test [more:comp_iter] -> CompFor(targets,iter,more,is_async)
 comp_iter ::=
     comp_for | comp_if
 comp_if ::=
@@ -74,8 +173,11 @@ yield_expression ::=
 primary ::=
     atom | attributeref | sub_or_slicing | call
 attributeref ::=
-    val:primary "." attr:identifier -> AttributeRef(val,attr)
+    val:primary "." attr:identifier -> Attr(val,attr)
 
+chained_attributeref ::= # x.y.z made up of nothing but identifiers separated by dots
+    val:chained_attributeref "." attr:identifier -> Attr(val,attr)
+    identifier
 
 # note that if there are no proper slices in the slice list then it's a subscription. We handle this by simply parsing subscription before slicing
 sub_or_slicing ::= # ordered!
@@ -103,24 +205,41 @@ proper_slice ::=
 
 # here i separate into two separate lines so that `args` defaulting to "[]" can be done easily
 call ::=
-    func:primary "(" ")" -> Call(func,Args([]))
-    func:primary "(" arg0:comprehension ")" -> Call(func,Args([arg0]))
-    func:primary "(" args:argument_list [","] ")" -> Call(func,args)
+    func:primary "(" comp:comprehension ")" -> Call(func,Args([GeneratorExpr(comp.expr,comp.comp_for)]))
+    func:primary args:argument_list -> Call(func,args)
 
-argument_list ::=
-    a:positional_arguments ["," b:starred_and_keywords] ["," c:keywords_arguments] -> Args([*a,*b,*c])
-    b:starred_and_keywords  ["," c:keywords_arguments] -> Args([*b,*c])
-    c:keywords_arguments -> Args(c)
 
-# macros/fns can take things directly as args like so...
-positional_arguments ::=
-    COMMA_LIST_NONEMPTY_NOTRAILING(STARRED(expression) | expression)
-starred_and_keywords ::=
-    COMMA_LIST_NONEMPTY_NOTRAILING(STARRED(expression) | keyword_item)
-keywords_arguments ::=
-    COMMA_LIST_NONEMPTY_NOTRAILING(DSTARRED(expression) | keyword_item)
+#    There are 3 stages and there's no going backwards:
+#    1.Comma-sep list mix of Expr | *Expr
+#        (Expr | *Expr) list
+#    2.As soons as an ident=Expr shows up, switch to a comma-sep list of (ident=Expr) | *Expr
+#        ((ident=Expr) | *Expr) list
+#    3.As soon as a **Expr shows up, switch a comma-sep list of (ident=Expr) | **Expr
+#        ((ident=Expr) | **Expr) list
+#    A trailing comma at the end is okay
+
 keyword_item ::=
     k:identifier "=" v:expression -> KVPair(k,v)
+
+positional_argument ::=
+    STARRED(expression) | expression
+starred_and_keyword ::=
+    STARRED(expression) | keyword_item
+keywords_argument ::=
+    DSTARRED(expression) | keyword_item
+
+## DEVIATION: my argument_list allows for empty argument lists because it makes it more convenient everywhere, it automatically fills in the "(" ")" for you, and it also allows for a trailing comma by default
+pdef argument_list(p,allow_trailing_comma=True):
+    stages = [p.positional_argument, p.starred_and_keyword, p.keywords_argument]
+    with p.parens():
+        return Args(
+            p.comma_list(
+                *stages,
+                nonempty=False,
+                ordered=True, # <- important!
+                allow_trailing_comma=allow_trailing_comma
+                )
+            )
 
 # notice how every blue bnf must evaluate to some sort of Py expression which may or may not be used
 # btw the rhs after "->" is arbitrary python
@@ -194,10 +313,10 @@ expression_nocond(or_test) ::=
 
 lambda_expr ::=
     "lambda" ":" body:expression -> Lambda(Params([]),body)
-    "lambda" params:parameter_list ":" body:expression -> Lambda(params,body)
+    "lambda" params:parameter_list(allow_annotations=False,parens=False) ":" body:expression -> Lambda(params,body)
 lambda_expr_nocond ::=
     "lambda" ":" body:expression_nocond -> Lambda(Params([]),body)
-    "lambda" params:parameter_list ":" body:expression_nocond -> Lambda(params,body)
+    "lambda" params:parameter_list(allow_annotations=False,parens=False) ":" body:expression_nocond -> Lambda(params,body)
 
 expression_list ::=
     v:COMMA_LIST_NONEMPTY_HASCOMMA(expression) -> Tuple(v)
@@ -278,7 +397,7 @@ augop_noeq ::=
     "|"-> BitOr
 
 annotated_assignment_stmt ::=
-    tar:augtarget ":" typ:expression ["=" val:expression] -> AugAsn(tar,typ,val)
+    tar:augtarget ":" typ:expression ["=" val:expression] -> AnnAsn(Annotated(tar,typ),val)
 
 assert_stmt ::= 
     "assert" v:expression ["," msg:expression] -> Assert(v,msg)
@@ -309,10 +428,10 @@ import_stmt ::=
     "import" mods:COMMA_LIST_NONEMPTY_NOTRAILING(OR_ALIAS(module)) -> Import(mods)
     "from" mod:relative_module "import" names:COMMA_LIST_NONEMPTY_NOTRAILING(str_or_alias) -> FromImport(mod,names)
     "from" mod:relative_module "import" "(" names:COMMA_LIST_NONEMPTY(str_or_alias) ")" -> FromImport(mod,names)
-    "from" mod:module "import" "*" -> FromImport(mod,Starred(NoneLit()))
+    "from" mod:module "import" "*" -> FromImport(mod,Starred(None))
 
 module ::=
-    NO_TRAILING_WS((v1:identifier ".")*) v2:identifier -> ModulePath([*v1,v2],0)
+    v:dotted_name -> ModulePath(v,0)
 relative_module ::=
     NO_TRAILING_WS((dots:".")*) mod:module -> ModulePath(mod.names,len(dots)) # 
     NO_TRAILING_WS((dots:".")*) "." -> ModulePath("",len(dots)+1)
@@ -340,60 +459,98 @@ compound_stmt ::=
     with_stmt
     funcdef
     classdef
-    async_with_stmt
-    async_for_stmt
-    async_funcdef
 
-suite         ::=
-    stmt_list NEWLINE | NEWLINE INDENT statement+ DEDENT
-statement     ::=
-    stmt_list NEWLINE | compound_stmt
-stmt_list     ::=
-    simple_stmt (";" simple_stmt)* [";"]
+# this is called right after ":" for compound_stmts.
+suite ::=
+    stmts:stmt_list NEWLINE -> Suite(stmts) # a;b;c style suite, ended by newline. yields SimpleChain.
+    NEWLINE INDENTED((stmts:statement)+) -> Suite(stmts) # indented and newline separated style suite. yields [CompoundStmt|SimpleChain]
 
-if_stmt ::=  "if" expression ":" suite
-             ("elif" expression ":" suite)*
-             ["else" ":" suite]
+# the minimum complete unit the interpreter can process
+statement ::= # returns SimpleChain | CompoundStmt
+    s:stmt_list NEWLINE -> s
+    compound_stmt # often has a suite for the body
 
-while_stmt ::=  "while" expression ":" suite
-                ["else" ":" suite]
+stmt_list ::= # returns [SimpleStmt]
+    s1:simple_stmt (";" s2:simple_stmt)* [";"] -> SimpleChain([s1,*s2])
 
-for_stmt ::=  "for" target_list "in" expression_list ":" suite
-              ["else" ":" suite]
+if_stmt ::= 
+    "if" cond:expression ":" body:suite ("elif" elif_conds:expression ":" elif_bodies:suite)* ["else" ":" else_body:suite] -> If(cond,body,elif_conds,elif_bodies,else_body)
 
-try_stmt  ::=  try1_stmt | try2_stmt
-try1_stmt ::=  "try" ":" suite
-               ("except" [expression ["as" identifier]] ":" suite)+
-               ["else" ":" suite]
-               ["finally" ":" suite]
-try2_stmt ::=  "try" ":" suite
-               "finally" ":" suite
+while_stmt ::=
+    "while" cond:expression ":" body:suite ["else" ":" else_body:suite] -> While(cond,body,else_body)
 
-with_stmt ::=  "with" with_item ("," with_item)* ":" suite
-with_item ::=  expression ["as" target]
+for_stmt ::=
+    is_async:["async"] "for" tar:target_list "in" iter:expression_list ":" body:suite ["else" ":" else_body:suite] -> For(tar,iter,body,else_body,is_async)
 
-funcdef                 ::=  [decorators] "def" funcname "(" [parameter_list] ")"
-                             ["->" expression] ":" suite
-decorators              ::=  decorator+
-decorator               ::=  "@" dotted_name ["(" [argument_list [","]] ")"] NEWLINE
-dotted_name             ::=  identifier ("." identifier)*
-parameter_list          ::=  defparameter ("," defparameter)* ["," [parameter_list_starargs]]
-                             | parameter_list_starargs
-parameter_list_starargs ::=  "*" [parameter] ("," defparameter)* ["," ["**" parameter [","]]]
-                             | "**" parameter [","]
-parameter               ::=  identifier [":" expression]
-defparameter            ::=  parameter ["=" expression]
-funcname                ::=  identifier
+try_stmt ::=
+    "try" ":" body:suite ("except" [excs:OR_ALIAS(expression)] ":" except_bodies:suite)+ ["else" ":" else_body:suite] ["finally" ":" finally_body:suite] -> Try(body,excs,except_bodies,else_body,finally_body)
+    "try" ":" body:suite "finally" ":" finally_body:suite -> Try(body,[],[],None,finally_body)
 
-classdef    ::=  [decorators] "class" classname [inheritance] ":" suite
-inheritance ::=  "(" [argument_list] ")"
-classname   ::=  identifier
+with_stmt ::=
+    is_async:["async"] "with" withitems:COMMA_LIST_NONEMPTY(with_item) ":" body:suite -> With(withitems,body,is_async)
+with_item ::=
+    v:expression "as" tar:target -> WithItem(v,tar)
+    v:expression -> WithItem(v,None)
 
-async_funcdef ::=  [decorators] "async" "def" funcname "(" [parameter_list] ")"
-                   ["->" expression] ":" suite
 
-async_for_stmt ::=  "async" for_stmt
+decorator ::=
+    "@" v:chained_attributeref args:argument_list NEWLINE -> Decorator(v,args)
+    "@" v:chained_attributeref NEWLINE -> Decorator(v,None)
 
-async_with_stmt ::=  "async" with_stmt
 
+
+
+# "If a parameter has a default value, all following parameters up until the “*” must also have a default value — this is a syntactic restriction that is not expressed by the grammar." (from Python LRM) -> we aim to fix this in our BNF grammaer
+
+#    There are 6 stages and there's no going backwards:
+#    Btw the BNF grammar fails to capture the fact that defaulted args can only come after nondefaulted args
+#    param ::= ident [":" Expr]
+#    1. param list
+#    2. (param=Expr) list
+#    3. *param | *
+#    4. param list
+#    5. (param=Expr) list
+#    6. **param | **
+#    A trailing comma at the end is okay
+#    Any of these can have an annotation like ident:expression or ident:expression=expression
+
+parameter ::= # returns (str|Annotated)
+    name:identifier ":" type:expression -> Annotated(name,type)
+    identifier
+parameter_noann ::=
+    identifier
+
+# DEVIATION from LRM which lets defparameter alternatively be a normal parameter
+defparameter ::=
+    k:parameter "=" v:expression -> KVPair(k,v)
+defparameter_noann ::=
+    k:parameter_noann "=" v:expression -> KVPair(k,v)
+
+## DEVIATION: my parameter_list allows for empty parameter lists because it makes it more convenient everywhere, fills in the "(" ")" for you by default (toggle with `parens`), and it also allows for a trailing comma
+pdef parameter_list(p,allow_annotations=True,parens=True):
+    param = p.parameter_noann if not allow_annotations else p.parameter
+    defparam = p.defparameter_noann if not allow_annotations else p.defparameter
+    stages = [param, defparam, p.once(p.starparam), param, defparam, p.once(p.dstarparam)]
+    with p.maybe_cm(p.parens,parens):
+        return Args(
+            p.comma_list(
+                *stages,
+                nonempty=False,
+                ordered=True, # <- important!
+                allow_trailing_comma=False
+                )
+            )
+
+starparam ::=
+    STARRED(parameter)
+    STARRED(pass)
+dstarparam ::=
+    DSTARRED(parameter)
+    DSTARRED(pass)
+
+funcdef ::= 
+    [(decos:decorator)+] is_async:["async"] "def" fname:identifier params:parameter_list ["->" return_ann:expression] ":" body:suite -> FuncDef(fname,params,body,decos,is_async,return_ann)
+classdef ::=
+    [(decos:decorator)+] "class" cname:identifier ["(" ")"] ":" body:suite -> ClassDef(cname,body,None,decos)
+    [(decos:decorator)+] "class" cname:identifier args:argument_list(allow_trailing_comma=False) ":" body:suite -> ClassDef(cname,body,args,decos)
 
