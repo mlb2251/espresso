@@ -1,9 +1,16 @@
 ### https://docs.python.org/3/reference/lexical_analysis.html#literals
 ### ^^^ work through this from top to bottom is the next step do it. it's important. once it's done everything will work nicely. encodings and all.
 
-
+# also you should write a lexer, itll be really quick
 
 # note that sometimes things are ordered within a bnf list of productions so you shouldnt optimize. Maybe have a special flag for optimizing a bnf and just do it for stuff where order doesnt matter (ie xor situations) like simple_stmt
+
+#For BNF writing note that using the ternary on the RHS is NOT proper style. Either split into more production rule branches, or abstract away. For example:
+# a [b] c d -> 
+# is the same as
+# a b c d ->
+# a c d ->
+# and another option is to pull `b` and any related things into a separate helper rule that outputs the right value
 
 _COMMA_LIST(x) ::=
     v1:x ("," v2:x)* -> [v1,*v2]
