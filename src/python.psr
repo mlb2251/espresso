@@ -55,82 +55,83 @@ enclosure ::=
 literal ::=
     REGEX(stringliteral) | REGEX(bytesliteral) | REGEX(integer) | REGEX(floatnumber) | REGEX(imagnumber) | boolliteral | noneliteral | ellipsisliteral
 
+# these will all be used in lex instead of yacc
 
 # for speed all these could be combined into one big regex if you wanted to. Prob minimal difference and less readable though
-integer = "({decinteger}|{bininteger}|{octinteger}|{hexinteger})"
-decinteger = "(([1-9](_?\d)+)|(0+(_?0)*))"
-    #nonzerodigit (["_"] digit)* | "0"+ (["_"] "0")*
-bininteger = "(0(b|B)(_?(0|1))+)"
-    #"0" ("b" | "B") (["_"] bindigit)+
-octinteger = "(0(o|O)(_?[0-7])+)"
-    #"0" ("o" | "O") (["_"] octdigit)+
-hexinteger = "(0(x|X)(_?[0-9a-fA-F])+)"
-    #"0" ("x" | "X") (["_"] hexdigit)+
-
-floatnumber = "({pointfloat}|{exponentfloat})"
-pointfloat = "(({digitpart}?{fraction})|({digitpart}\.))"
-exponentfloat = "(({digitpart}|{pointfloat}){exponent})"
-digitpart = "(\d(_?\d)*)"
-fraction = "\.{digitpart}"
-exponent = "((e|E)(+|-)?{digitpart})"
-
-imagnumber = "(({floatnumber}|{digitpart})(j|J))"
-
-# Note we assume all strings are in 'raw' mode since thats how theyll be read during f.read() of *.psr. So '\\.' is the same as r'\\.' meaning match the backslash then match any character
-stringliteral =  "({stringprefix}?({shortstring}|{longstring}))"
-quote = "(?P<quotechar>('|\"))"
-triquote = "(?P<quotechar>('''|\"\"\"))"
-stringprefix = "(([rR][fF])|([fF][rR])|[ruRUfF])"
-shortstring =  "({quote}{shortstringitem}*(?P=quotechar))"
-longstring =  "({triquote}longstringitem*(?P=quotechar))"
-shortstringitem = "({shortstringchar}|{stringescapeseq})"
-longstringitem = "({longstringchar}|{stringescapeseq})"
-shortstringchar = "(([^\\\n])(?!(?P=quotechar)))" # ?! is a negative lookahead
-#shortstringchar ::=  <any source character except "\" or newline or the quote>
-longstringchar = "([^\\])"
-#longstringchar ::=  <any source character except "\">
-stringescapeseq = "(\\.)"
-#stringescapeseq ::=  "\" <any source character>
-
-
-bytesliteral =  "({bytesprefix}?({shortbytes}|{longbytes}))"
-bytesprefix = "(([bB][rR])|([rR][bB])|[b])"
-shortbytes =  "({quote}{shortbytesitem}*(?P=quotechar))"
-longbytes =  "({triquote}longbytesitem*(?P=quotechar))"
-shortbytesitem = "({shortbyteschar}|{bytesescapeseq})"
-longbytesitem = "({longbyteschar}|{bytesescapeseq})"
-shortbyteschar = "(([^\\\n])(?!(?P=quotechar)))"
-#shortbyteschar = <any ASCII character except "\" or newline or the quote>
-longbyteschar = "([^\\])"
-#longbyteschar = <any ASCII character except "\">
-bytesescapeseq = "(\\.)"
-#bytesescapeseq = "\" <any ASCII character>
-
-
-
-
-
-
-### https://docs.python.org/3/reference/lexical_analysis.html#literals
-### ^^^ work through this from top to bottom is the next step do it. it's important. once it's done everything will work nicely. encodings and all.
-
-
-
-
-
-
-
-
-
-# DEVIATION modified to include fstring prefix here and not in the normal string
-f_string = "{fstringprefix}{f_string_body}" ## <-- TODO put {quote} stuff there and do triquote stuff etc
-f_string_body = "(({literal_char}|(\{\{)|(\}\})|{replacement_field})*)"
-fstringprefix = "(([rR][fF])|([fF][rR])|[fF])"
-replacement_field = "\{{f_expression}(!{conversion})?(:{format_spec})?\}"
-f_expression = (conditional_expression | "*" or_expr) ("," conditional_expression | "," "*" or_expr)* [","] | yield_expression
-conversion = "([sra])"
-format_spec = (literal_char | NULL | replacement_field)*
-literal_char = "([^\{\}])"
+ ###integer = "({decinteger}|{bininteger}|{octinteger}|{hexinteger})"
+ ###decinteger = "(([1-9](_?\d)+)|(0+(_?0)*))"
+ ###    #nonzerodigit (["_"] digit)* | "0"+ (["_"] "0")*
+ ###bininteger = "(0(b|B)(_?(0|1))+)"
+ ###    #"0" ("b" | "B") (["_"] bindigit)+
+ ###octinteger = "(0(o|O)(_?[0-7])+)"
+ ###    #"0" ("o" | "O") (["_"] octdigit)+
+ ###hexinteger = "(0(x|X)(_?[0-9a-fA-F])+)"
+ ###    #"0" ("x" | "X") (["_"] hexdigit)+
+ ###
+ ###floatnumber = "({pointfloat}|{exponentfloat})"
+ ###pointfloat = "(({digitpart}?{fraction})|({digitpart}\.))"
+ ###exponentfloat = "(({digitpart}|{pointfloat}){exponent})"
+ ###digitpart = "(\d(_?\d)*)"
+ ###fraction = "\.{digitpart}"
+ ###exponent = "((e|E)(+|-)?{digitpart})"
+ ###
+ ###imagnumber = "(({floatnumber}|{digitpart})(j|J))"
+ ###
+ #### Note we assume all strings are in 'raw' mode since thats how theyll be read during f.read() of *.psr. So '\\.' is the same as r'\\.' meaning match the backslash then match any character
+ ###stringliteral =  "({stringprefix}?({shortstring}|{longstring}))"
+ ###quote = "(?P<quotechar>('|\"))"
+ ###triquote = "(?P<quotechar>('''|\"\"\"))"
+ ###stringprefix = "(([rR][fF])|([fF][rR])|[ruRUfF])"
+ ###shortstring =  "({quote}{shortstringitem}*(?P=quotechar))"
+ ###longstring =  "({triquote}longstringitem*(?P=quotechar))"
+ ###shortstringitem = "({shortstringchar}|{stringescapeseq})"
+ ###longstringitem = "({longstringchar}|{stringescapeseq})"
+ ###shortstringchar = "(([^\\\n])(?!(?P=quotechar)))" # ?! is a negative lookahead
+ ####shortstringchar ::=  <any source character except "\" or newline or the quote>
+ ###longstringchar = "([^\\])"
+ ####longstringchar ::=  <any source character except "\">
+ ###stringescapeseq = "(\\.)"
+ ####stringescapeseq ::=  "\" <any source character>
+ ###
+ ###
+ ###bytesliteral =  "({bytesprefix}?({shortbytes}|{longbytes}))"
+ ###bytesprefix = "(([bB][rR])|([rR][bB])|[b])"
+ ###shortbytes =  "({quote}{shortbytesitem}*(?P=quotechar))"
+ ###longbytes =  "({triquote}longbytesitem*(?P=quotechar))"
+ ###shortbytesitem = "({shortbyteschar}|{bytesescapeseq})"
+ ###longbytesitem = "({longbyteschar}|{bytesescapeseq})"
+ ###shortbyteschar = "(([^\\\n])(?!(?P=quotechar)))"
+ ####shortbyteschar = <any ASCII character except "\" or newline or the quote>
+ ###longbyteschar = "([^\\])"
+ ####longbyteschar = <any ASCII character except "\">
+ ###bytesescapeseq = "(\\.)"
+ ####bytesescapeseq = "\" <any ASCII character>
+ ###
+ ###
+ ###
+ ###
+ ###
+ ###
+ ###### https://docs.python.org/3/reference/lexical_analysis.html#literals
+ ###### ^^^ work through this from top to bottom is the next step do it. it's important. once it's done everything will work nicely. encodings and all.
+ ###
+ ###
+ ###
+ ###
+ ###
+ ###
+ ###
+ ###
+ ###
+ #### DEVIATION modified to include fstring prefix here and not in the normal string
+ ###f_string = "{fstringprefix}{f_string_body}" ## <-- TODO put {quote} stuff there and do triquote stuff etc
+ ###f_string_body = "(({literal_char}|(\{\{)|(\}\})|{replacement_field})*)"
+ ###fstringprefix = "(([rR][fF])|([fF][rR])|[fF])"
+ ###replacement_field = "\{{f_expression}(!{conversion})?(:{format_spec})?\}"
+ ###f_expression = (conditional_expression | "*" or_expr) ("," conditional_expression | "," "*" or_expr)* [","] | yield_expression
+ ###conversion = "([sra])"
+ ###format_spec = (literal_char | NULL | replacement_field)*
+ ###literal_char = "([^\{\}])"
 #literal_char = <any code point except "{", "}" or NULL>
 ## i have no idea what NULL means so i ignored it (maybe its a \0)
 ## "Python reads program text as Unicode code points"
@@ -269,7 +270,6 @@ u_expr(power) ::=
     "-" rhs:u_expr -> Unop(Sub,rhs)
     "+" rhs:u_expr -> Unop(Add,rhs)
     "~" rhs:u_expr -> Unop(Invert,rhs)
-    "~" "test" rhs:u_expr -> Unop(Invert,rhs)
 
 @unordered
 m_expr(u_expr) ::=
@@ -314,7 +314,7 @@ cmpop ::=
     "!=" -> NEQ
     "is" "not" -> ISNOT
     "is" -> IS
-    "not in" -> NOTIN
+    "not" "in" -> NOTIN
     "in" -> IN
 
 
@@ -476,12 +476,12 @@ compound_stmt ::=
 
 # this is called right after ":" for compound_stmts.
 suite ::=
-    stmts:stmt_list NEWLINE -> Suite(stmts) # a;b;c style suite, ended by newline. yields SimpleChain.
-    NEWLINE INDENTED((stmts:statement)+) -> Suite(stmts) # indented and newline separated style suite. yields [CompoundStmt|SimpleChain]
+    stmts:stmt_list newline -> Suite(stmts) # a;b;c style suite, ended by newline. yields SimpleChain.
+    newline INDENTED((stmts:statement)+) -> Suite(stmts) # indented and newline separated style suite. yields [CompoundStmt|SimpleChain]
 
 # the minimum complete unit the interpreter can process
 statement ::= # returns SimpleChain | CompoundStmt
-    s:stmt_list NEWLINE -> s
+    s:stmt_list newline -> s
     compound_stmt # often has a suite for the body
 
 stmt_list ::= # returns [SimpleStmt]
@@ -508,8 +508,8 @@ with_item ::=
 
 
 decorator ::=
-    "@" v:chained_attributeref args:argument_list NEWLINE -> Decorator(v,args)
-    "@" v:chained_attributeref NEWLINE -> Decorator(v,None)
+    "@" v:chained_attributeref args:argument_list newline -> Decorator(v,args)
+    "@" v:chained_attributeref newline -> Decorator(v,None)
 
 
 
