@@ -38,7 +38,7 @@ OR_ALIAS(x) ::=
     x
 
 dotted_name ::= # yields [str]
-    NO_TRAILING_WS((v1:identifier ".")*) v2:identifier -> [*v1,v2]
+    (v1:identifier no_ws ".")* no_ws v2:identifier -> [*v1,v2]
 
 @unordered
 atom ::=
@@ -393,7 +393,7 @@ augtarget ::=
     v:attributeref -> Target(v)
     v:sub_or_slicing -> Target(v)
 augop ::=
-    NO_TRAILING_WS(v:augop_noeq) "=" -> v
+    v:augop_noeq no_ws "=" -> v
 @unordered
 augop_noeq ::=
     "+" -> Add
@@ -447,8 +447,8 @@ import_stmt ::=
 module ::=
     v:dotted_name -> ModulePath(v,0)
 relative_module ::=
-    NO_TRAILING_WS((dots:".")*) mod:module -> ModulePath(mod.names,len(dots)) # 
-    NO_TRAILING_WS((dots:".")*) "." -> ModulePath("",len(dots)+1)
+    (dots:"." no_ws)* no_ws mod:module -> ModulePath(mod.names,len(dots)) # 
+    (dots:"." no_ws)* no_ws "." -> ModulePath("",len(dots)+1)
 
 future_stmt ::= 
     "from" "__future__" "import" v:COMMA_LIST_NONEMPTY_NOTRAILING(str_or_alias) -> Future(v)
@@ -546,6 +546,7 @@ pdef parameter_list(p,allow_annotations=True,parens=True):
     defparam = p.defparameter_noann if not allow_annotations else p.defparameter
     stages = [param, defparam, p.once(p.starparam), param, defparam, p.once(p.dstarparam)]
     with p.maybe_cm(p.parens,parens):
+
         return Args(
             p.comma_list(
                 *stages,
@@ -554,7 +555,8 @@ pdef parameter_list(p,allow_annotations=True,parens=True):
                 allow_trailing_comma=False
                 )
             )
-
+            #
+#
 starparam ::=
     STARRED(parameter)
     STARRED(pass)

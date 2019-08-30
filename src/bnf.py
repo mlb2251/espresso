@@ -1,4 +1,5 @@
 
+# the initial parser. This is used to parse bnf.ast and bnf.psr to generate a new gen II parser to replace this one :)
 import re
 import mlb
 
