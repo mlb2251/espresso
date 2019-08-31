@@ -1,0 +1,52 @@
+
+
+
+The next step is to Read:
+-https://docs.python.org/3/reference/lexical_analysis.html
+-https://docs.python.org/3/reference/executionmodel.html
+-https://docs.python.org/3/reference/datamodel.html#objects-values-and-types
+-philip guo's cpython internals
+
+
+
+# I could make my own language for type inference too
+
+# we start with completely unannotated python
+
+
+
+
+-Attributes are individually type inferred
+-Existence of an attr is also inferred
+-overloadable operations are desugared to calling the dunder version
+-Note that since you cant assign to __len__ or __getattribute__ maybe we dont need to deal with runtime assignments
+    -> or we could handle it as normal by just observing how python behaves in each case.
+-each Node has an INode attached to it -- an Inferred Node that is. Like an IFloat. Theres one Node per type. A type is defined as a class or 
+
+
+float + float -> float   # desugars to Add(IFloat,IFloat)
+float + int -> float
+int + float -> float
+IntLit -> int
+
+Most importantly we don't want to assume anything that we can't assume.
+Some things to keep in mind:
+-@property making a.x actually call something
+-setattr making a.x actually call something
+-you can totally assign functions to attrs
+-test.bar(y) is just sugar on bar(test,y). Though read the datamodel etc to find out for sure
+
+*You want to do it right this time, so truly read the datamodel for everything*
+
+
+
+
+
+
+
+
+
+
+
+
+
