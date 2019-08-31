@@ -1,0 +1,120 @@
+# we use slashes to border regex bc theyre so much rarer than quotes showing up inside the regex. also it means you dont need any extra symbols to denote something is a regex. Also it means you can throw control chars on the end in a nice looking way. Control characters can be used to add flags like re.MULTILINE or re.DOTALL to the `re` compiler, or more often to select capture group(s)  for the `/regex/` expression to evaluate to.
+
+upper_name ::=
+    /(_*[A-Z][A-Z0-9_]*)/
+some_bit ::=
+    /[a-z0-9_]/ # separated out just to demonstrate
+lower_name ::=
+    /(_*[a-z]{some_bit}*)/ # this is how you embed a regex in another
+quoted ::=
+    v:/(['"])(.*?)\1/2 -> Quoted(v) # the control character '2' yields contents of second group
+rhs ::=
+    /.*?/ # nongreedy so it stops at first newline
+newline ::=
+    /(\\n|\\r\\n|\\r)/
+regex ::=
+    re:/\/[^\\\/]*?\// no_ws control:(/[a-z0-9]/)* -> Regex(re,control)
+
+# this is a beautiful regex. The same one is used for syn highlighting. Here's the breakdown:
+    # /p(def.*?^(?!\s|#|$))/1dm
+    #  p(def captures 'pdef' ofc
+    #       .*? is a non greedy multiline ('/d': dot matches newlines too. '/m': multiline regex)
+    #           so we do a nongreedy multiline match until the first (ie nongreedy) time we
+    #           can successfully match the rest of the following regex.
+    #          ^ start of line
+    #           (?!\s|#|$) since '?!' is negative lookahead and $ is EOL here, this matches
+    #                      when the SOL '^' is NOT followed by whitespace/EOL/comment. Meaning
+    #                      it matches the first unindented non-empty non-comment line. The '$'
+    #                      is the empty line test, and note that an indented comment is handled
+    #                      by the general indent case '\s'.
+    #                     )/1dm return the first group (ie the outer one with 'def...') and 'd'
+    #                           and 'm' are control characters mentioned in the '.*?' explanation.
+    #                      
+# TODO note that this pdef_fn should be replaced with `funcdef` from python.psr once that compiles. That we we have syn checking on our pdefs further ahead of time.
+pdef_fn ::=
+    v:/p(def.*?^(?!\s|#|$))/1dm -> PdefFn(v) # d=re.DOTALL, m=re.MULTILINE
+
+
+till_paren ::= 
+    /.*?(?=[()])/ # '(?=...)' is positive lookahead for open or close paren
+
+# TODO note that this fails to properly handle quotes. As soon as python.psr is functional this whole function should be simply replaced with args_list
+# use like "(" verbatim_python_till_paren ")"
+pdef verbatim_python_till_paren(p):
+    result = ""
+    depth = 0
+    while True:
+        text = p.or_none.till_paren()
+        if text is None:
+            raise SyntaxError("expected closing paren")
+        if text.count('\"') %2 == 1 or text.count('\'') %2 == 1:
+            raise NotImplementedError("I haven't given the parser the ability to handle what happens when strings show up in parens. This could be implemented. Or even more simply and robustly once python.psr compiles you can use argument_list from there")
+        result += text
+        if p.or_false.token('('):
+            depth += 1
+            result += '('
+        elif p.or_false.token(')'):
+            depth -= 1
+            if depth < 0:
+                return result # this is the only non-error exit point
+            result += ')'
+    assert False # unreachable
+
+# verbatim_python_till_newline should be replaced with starred_expression or something like that once python.psr compiles
+verbatim_python_till_newline ::=
+    /.*/
+
+# fundamentals
+
+atom ::= # ordered because `assignment` should come before `bnf_call`
+    assignment | bnf_call | quoted_str | maybe | parenth_form | regex
+primary(atom) ::=
+    kleene_star | kleene_plus
+primary_seq ::=
+    v:primary+ -> Seq(v)
+    
+or_seq(primary_seq) ::=
+    left:primary_seq "|" right:or_seq -> Seq([Or(left,right)]) # single item seq
+parenth_form ::=
+    "(" or_seq ")"
+
+# assignment
+assignment ::=
+    name:lower_name ":" val:atom -> Asn(name,val)
+
+# kleene
+kleene_plus ::=
+    v:atom "+" -> KleenePlus(v)
+kleene_star ::=
+    v:atom "*" -> KleeneStar(v)
+
+# maybe
+maybe ::=
+    "[" items:or_seq "]" -> Maybe(items)
+
+# quoted
+quoted_str ::=
+    v:quoted -> Quoted(v)
+
+# calls
+bnf_call ::=
+    name:lower_name no_ws "(" args:verbatim_python_till_paren ")" -> BnfCall(name,args)
+    name:lower_name /(?!:)/ -> BnfCall(name,"")
+macro_call ::=
+    name:upper_name no_ws "(" args:macro_args ")" -> MacroCall(name,args)
+macro_args ::=
+    v1:or_seq ("," v2:or_seq)* -> [v1,*v2]
+
+# func defs
+parameters ::=
+    v1:lower_name ("," v2:lower_name)* -> [v1,*v2]
+    pass -> []
+decorator ::=
+    "@" name:lower_name newline -> Decorator(name)
+macro_fn ::=
+    [decos:decorator+] name:lower_name no_ws "(" params:parameters ")" "::=" newline rules:production+ -> MacroFn(name,params,rules,decos)
+bnf_fn ::=
+    [decos:decorator+] name:upper_name ["(" inheritance:parameters ")"] "::=" newline rules:production+ -> BnfFn(name,inheritance,rules,decos)
+production ::=
+    or_seq "->" verbatim_python_till_newline newline
+
