@@ -3,7 +3,7 @@
 Expr: # something that can be assigned to or returned directly
     BnfCall(name:str,args:str)# -> "p.{name}({args})"
     Or(left:Expr,right:Expr) # same as GeneralOr but each branch is a single expr
-    MacroCall(name:str,args:[Seq])
+    MacroCall(name:str,args:[Expr])
     Maybe(items:Expr) # evals to a bool
     Quoted(val:str) # trivially translated to Regex. oh wait not totally trivial insert escapes where needed
     Regex(re:str,control:[str]) # regexes yield the entire string they capture (unless `control` says otherwise)
@@ -11,6 +11,15 @@ Expr: # something that can be assigned to or returned directly
     KleeneStar(val:Expr)
     Asn(name:str,val:Expr)# -> "{name} = {val}"
     Seq(items:[Expr])
+
+
+
+#
+# Seq -> fn() but first `def fn` side effect
+# Or -> 
+# KPlus -> 
+# Asn -> 
+
 
 Production(items:Seq,rhs:str)
 Decorator(name:str)
