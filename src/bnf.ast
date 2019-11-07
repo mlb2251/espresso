@@ -21,7 +21,23 @@ Expr: # something that can be assigned to or returned directly
 # Asn -> 
 
 
-Production(items:Seq,rhs:str)
+# everything is an expression but some expressions (like Seq w len > 1) eval to UNDEF
+
+# b.append(pynode_stmt)
+# b.desugar(mynode)
+# should .parse be .parse(text,type=object)? Then it could even do unwrapping/wrapping for singleton Suites and such
+
+# todo:
+# Node.tuple
+# Node.parent(cls=object)
+# rename "Stmt" to smtg else more relevant...
+# logical_xor keeping track of what almost succeeded
+# defaults for FuncDef(fname=name) etc
+# Var/FuncDef.path should give a name that references the var/func. This can just be done in terms of globals() to avoid local overrides.
+# left_recursion autodetection (for bnf itself too!)
+# note that "*" is more than you think. it's greedy but you fail later it'll backtrack and try a shorter match. Perhaps thats not needed for this though?
+
+Production(items:Seq,rhs:str?)
 Decorator(name:str)
 
 BnfFn(name:str,argnames:[str],rules:[Production],decos:[Decorator])
