@@ -37,6 +37,9 @@ OR_ALIAS(x) ::=
     v:x "as" name:identifier -> Alias(v,name)
     x
 
+pdef pass(p):
+    return None
+
 dotted_name ::= # yields [str]
     (v1:identifier no_ws ".")* no_ws v2:identifier -> [*v1,v2]
 

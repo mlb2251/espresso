@@ -76,7 +76,7 @@ primary_seq ::=
 or_seq(primary_seq) ::=
     left:primary_seq "|" right:or_seq -> Seq([Or(left,right)]) # single item seq
 parenth_form ::=
-    "(" or_seq ")"
+    "(" v:or_seq ")" -> v
 
 # assignment
 assignment ::=

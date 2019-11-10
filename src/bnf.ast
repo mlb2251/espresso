@@ -1,18 +1,42 @@
 
 
-Expr: # something that can be assigned to or returned directly
+Atom: # something that can be assigned to or returned directly
     BnfCall(name:str,args:str)# -> "p.{name}({args})"
-    Or(left:Expr,right:Expr) # same as GeneralOr but each branch is a single expr
-    MacroCall(name:str,args:[Expr])
-    Maybe(items:Expr) # evals to a bool
+    Or(left:Seq,right:Seq)
+    MacroCall(name:str,args:[Seq])
+    Maybe(seq:Seq) # evals to a bool
     Quoted(val:str) # trivially translated to Regex. oh wait not totally trivial insert escapes where needed
     Regex(re:str,control:[str]) # regexes yield the entire string they capture (unless `control` says otherwise)
-    KleenePlus(val:Expr])
-    KleeneStar(val:Expr)
-    Asn(name:str,val:Expr)# -> "{name} = {val}"
-    Seq(items:[Expr])
+    KleenePlus(val:Seq])
+    KleeneStar(val:Seq)
+    Asn(name:str,seq:Seq)# -> "{name} = {val}"
+    Seq(items:[Atom]) # Seqs can have sub seqs like (a b c (d e f))
+
+Aux:
+    Production(seq:Seq,rhs:str?)
+    Decorator(name:str)
+
+Fn:
+    BnfFn(name:str,argnames:[str],rules:[Production],decos:[Decorator])
+    MacroFn(name:str,argnames:[str],rules:[Production],decos:[Decorator])
+    PdefFn(text:str)
 
 
+## making some decisions:
+# ((a:b)*)* means 'a' is a list of lists.
+# all Atoms return dicts of varname->val
+# Maybe returns an empty dict on failure
+# Seq returns the union of all its dicts and throws an error on key clashes
+# Or returns one of the dicts of its atoms
+# Asn returns a single item dict
+# Kleene constructs a list of dicts while keeping track of the number of times its run (N), then inverts it to a dict of length-N lists padded with Nones.
+# All other atoms default to empty dict, not whatever they eval to (for example a bnfcall in a seq evals to an empty dict whereas an {Asn of a bnfcall} in a seq evals to a singleton dict.
+# Asn is the only way to create new nonempty dicts
+    #Asn(BnfCall) assigns to whatever p.whatever() returns
+    #Asn(Maybe) returns True or False
+    #Asn(Or) is rearranged to Or(Asn) like x:(a|b|c) -> (x:a|x:b|x:c). So Asn distributes over Or
+    #Asn(Seq) throws an error on non singleton Seqs.
+    #Asn(Kleene) returns the number of times it ran
 
 #
 # Seq -> fn() but first `def fn` side effect
@@ -37,10 +61,4 @@ Expr: # something that can be assigned to or returned directly
 # left_recursion autodetection (for bnf itself too!)
 # note that "*" is more than you think. it's greedy but you fail later it'll backtrack and try a shorter match. Perhaps thats not needed for this though?
 
-Production(items:Seq,rhs:str?)
-Decorator(name:str)
-
-BnfFn(name:str,argnames:[str],rules:[Production],decos:[Decorator])
-MacroFn(name:str,argnames:[str],rules:[Production],decos:[Decorator])
-PdefFn(text:str)
 

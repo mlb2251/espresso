@@ -207,7 +207,6 @@ class BNFDesugarer(Desugarer):
                     self.build(items)
                     if rhs is None:
 
-                    
         elif isinstance(node,Maybe):
             items, = node.tuple
             with b.def() as fn:
